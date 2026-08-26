@@ -9,6 +9,36 @@ The
 publishes this deliverable's brief and spec, and this repo's name tells you
 which deliverable applies. Read both before you plan or build.
 
+## How to work in here
+
+- Keep the dev server running (`pnpm dev`) so you see changes as you make them.
+- Run `pnpm check` before you push.
+- Open the page in a browser and look at it. The rendered page is the truth;
+  your mental model of it isn't.
+- When a check fails, read its output before you change anything.
+- Never commit a red state.
+
+## The stack
+
+Converted to Astro (`comp4020:stack` course default). `astro.config.ts` sets
+`site`/`base` from this repo's origin remote; the dev server serves under that
+base path too, so a broken relative link shows up locally instead of only on
+the deployed URL. There's no shared layout component yet --- if the prototype
+grows past one page, factor the shared `<head>` into a `Layout.astro` that
+takes `title`/`description`/`card` as props rather than copy-pasting it.
+
+## Astro's scoped styles and JS-created elements don't mix
+
+A page's `<style>` block is scoped by default: Astro stamps a
+`data-astro-cid-*` attribute onto the elements in that page's own template
+and rewrites the block's selectors to require it. Anything a script creates
+at runtime with `document.createElement` never gets that attribute, so any
+scoped rule targeting it silently matches nothing — no error, just a page
+that looks unstyled. If a component builds part of its DOM in a `<script>`,
+give the `<style>` block covering those parts `is:global`, or move those
+rules into `global.css`. Check the built page's CSS for an `astro-*` hash on
+the rule in question if styles seem to be silently not applying.
+
 ## The link-preview card
 
 `public/card.png` (1200x630) is the image a shared link shows; `index.html`'s
@@ -24,6 +54,42 @@ ship. CI runs the same plus links, secrets and the deploy.
 
 `spec/README.md`, `PROCESS.md` and `reflections/README.md` are in this repo and
 say what they are for.
+
+## Capture process moments as they happen
+
+When a non-obvious approach really helps --- a test flips, a bug stops
+recurring, an attempt gets thrown away for a better one --- draft the moment
+into `process-notes.md` then, while the why is fresh, not at the end. Note
+which kind it is: the strongest moments land the fix in the harness (a
+`CLAUDE.md` rule, a wired-up check, a discarded attempt), not in a retry ---
+retrying until it passes is the routine case. `PROCESS.md` stays the curated
+file --- moments get promoted into it later, by hand, not every draft.
+
+## Phase checkpoints
+
+`plan.md` (once it exists) tracks the stages of the current build. When a
+task or phase from it is completed, stop and remind the student to:
+
+1. update `plan.md` with the current state and next steps,
+2. run `/clear`,
+3. reload context with `@plan.md`.
+
+Do this at each phase boundary, not only at the end.
+
+`plan.md` is a living file with two jobs at once: record the reasoning behind
+decisions already made in the code (not just what was built), and hand off
+to a fresh agent instance with zero other context — since `/clear` follows
+right after every update. Each update should therefore:
+
+- state the current/completed state plus the reasoning behind it, clearly
+  enough for a cold reader to understand why, not only what;
+- call out the latest agreed-upon direction explicitly, even if
+  implementation hasn't started yet;
+- give a clear, ordered next step plus the following tasks, so a blank agent
+  can act without re-deriving anything;
+- stay clearly structured (sections/headings), not a chronological log;
+- prune or rewrite stale sections rather than only appending, since the next
+  reader has no other context to reconcile against.
 
 ## This file is yours
 
