@@ -5,7 +5,7 @@ build plan: reasoning behind decisions, current state, and next steps for
 whoever (agent or me) picks this up next. Update it at phase boundaries, then
 `/clear` and reload with `@PLAN.md`, per `CLAUDE.md`.
 
-## Status (turn design confirmed good enough by the user — see bottom; step 4 is next)
+## Status (renderer + wall collision + designed turns all built; end-of-run screen + progress markers next)
 
 **Resolved as of this update.** The accent/ramp version was re-checked
 against the debug tool and the user gave three concrete complaints: turns
@@ -144,9 +144,10 @@ Built and green (`pnpm check`: typecheck, build, 41 tests across 4 files):
   backs the spec's "losable" requirement, not just a unit test of
   convenience.
 
-**Not yet built:** the end-of-run zoom-out. That's step 5 below (step 4,
-the renderer + input loop, is built — see "Mechanic" below for its
-current shape).
+**Not yet built:** the end-of-run zoom-out/results screen, the beat-synced
+pulse rendering, and the 20/40/60/80% progress markers. That's step 6
+below (steps 1–5, including the renderer + input loop and the trail, are
+built — see "Mechanic" below for the renderer's current shape).
 
 ## Mechanic: real wall collision (redesign, supersedes the tolerance model above)
 
@@ -209,6 +210,33 @@ seconds of upcoming corridor fit in the viewport at once (the "seeing the
 path coming" affordance) — raising it shortens that lookahead — so this
 wasn't a free tuning knob, worth another look if lookahead ever feels
 too short.
+
+**Round-3 feel requests (corridor width, corner style, map variety):**
+alongside the timing fix above, two separate complaints came out of the
+same playtest:
+
+- *"The corridor is too wide and the corners look too rounded."*
+  `CORRIDOR_HALF_WIDTH` went 34→20 (a first pass, before round-3's
+  timing-driven 20→12 above — the two changes landed for different
+  reasons but compound). Corner rendering switched from
+  `ctx.lineJoin = "round"` to `"miter"` with `ctx.miterLimit = 2`
+  (`game.ts`) — safe as a hard miter because every corridor segment
+  meets the next at exactly 90°, so a miter never spikes the way it
+  could at an arbitrary angle.
+- *"The map should look actually designed, not a repetitive
+  alternating left-right zigzag."* `route.ts`'s `walkTurns` picked
+  direction by flipping a `turnRight` boolean every turn — a strict
+  ping-pong that reads as one uniform staircase once drawn at speed.
+  Replaced with a fixed repeating `TURN_PATTERN` (`[true, true, false,
+  true, false, false, true, false]`, `true` = right) indexed by the
+  turn's *position in the sequence* via `turnDirectionForIndex(index)`,
+  giving occasional back-to-back turns in the same direction (hairpins)
+  instead of pure alternation. The index-not-timestamp rule is load-
+  bearing: `lateralOffset` calls `walkTurns` twice independently (once
+  for the corridor's `cornerTimes`, once for the player's own
+  `clickTimes`), and the two walks only stay comparable if the same
+  index always resolves to the same direction regardless of which
+  walk or what the actual timestamp is.
 
 ## The idea, as given
 
@@ -444,28 +472,51 @@ stay as-is.
 
 ## Next steps, in order
 
-1. ~~Move music into `src/`~~ — done, confirmed at
-   `src/assets/music/闫东炜 - 萤火虫の怨.mp3`, matches the glob pattern.
+1. ~~Move music into `src/`~~ — done.
 2. ~~Write `rhythm.ts` + sanity-check it~~ — done, see Status above.
-3. ~~Write the pure rule + its spec test~~ — done, see Status above.
-3.5. ~~Add accent detection + a difficulty ramp so only strong onsets
-   require a turn~~ — done, see Status above (`markTurns`); re-checked
-   with the debug tool a second time, two real bugs found and fixed
-   (silence gate + `minStartSeconds`, shortened averaging timescale — see
-   Status above), user confirmed the result is good enough to build on.
-   Step 3 of the round-2 fix plan (local/windowed percentile + max-gap
-   backstop) was explicitly deferred, not done — see Status above for why
-   and what to reach for instead if density comes up again.
-   **← current checkpoint, now resolved. Update this file, `/clear`,
-   reload `@PLAN.md` before continuing with step 4.**
-4. Turn onset times into a drawable route shape (see Concrete technical
-   plan above), then build the canvas renderer + input loop around
-   `runRoute`/`resolveCorner`. Include the beat-synced pulse and fading
-   trail (Scope, items 7–8) while building the renderer, since they're
-   additive to it either way.
-5. Add the end-of-run zoom-to-top-down tween.
-6. Playtest cold at both marking viewports; capture the one change that
+3. ~~Write the pure rule + its spec test~~ — done (`track.ts`'s
+   `lateralOffset`/`hasCrashed`, see "Mechanic: real wall collision").
+4. ~~Turn onset times into a drawable route shape and build the canvas
+   renderer + input loop~~ — done (`route.ts`'s `walkTurns`/
+   `buildRouteShape`, `game.ts`'s render/input loop). Fading trail
+   (Scope item 8) is built (`game.ts`'s `TRAIL_LENGTH`). **Beat-synced
+   pulse (Scope item 7) is not** — `route.ts`'s `buildRouteShape` already
+   computes `decorations: Marker[]` for every non-turn beat, but
+   `game.ts`'s `draw()` never reads `route.decorations` at all right now
+   — folded into step 5 below since it's the same "polish the live view"
+   pass.
+5. ~~Playtest round-3 fixes~~ — done this round: `minStartSeconds`
+   removed (turns allowed from t=0), corridor narrowed + sharpened
+   (`CORRIDOR_HALF_WIDTH` 34→20→12, miter corners), designed turn
+   pattern (`TURN_PATTERN` replacing strict alternation), and the
+   click-to-death timing lag tightened (`ROUTE_SPEED` 140→300) — see
+   Status above for all four.
+   **← current checkpoint. Update this file, `/clear`, reload
+   `@PLAN.md` before continuing with step 6.**
+6. **Enrich mechanics + polish the UI** (user's stated next direction,
+   scoped to the still-open MVP items rather than anything new):
+   1. Render the beat-synced pulse from `route.decorations` (Scope item
+      7, computed but undrawn — see step 4 note above) — flash/recolour
+      the corridor or a marker at each decoration's position as the dot
+      passes it.
+   2. **Progress markers at 20%/40%/60%/80% of the route** — visible
+      landmarks on the corridor (or a HUD readout) at those fractions of
+      `route.duration`, so a player can see how far through the run they
+      are.
+   3. **End-of-run results/summary screen** — the still-undone
+      end-of-run zoom-out from "The idea, as given" and Scope item 4:
+      on `terminal !== null`, tween the camera out to frame the whole
+      traveled path top-down (use the existing `trail`/dot-path data,
+      already top-down so this is a pan/zoom tween, not a new rendering
+      mode — see Feasibility above), plus basic run stats (time
+      survived / finished, how far along the route, maybe click count).
+   Build and manually-check these as separate small steps per
+   `CLAUDE.md` (each is a feel/visual judgment call, not a pass/fail
+   assertion) — playtest each before starting the next, rather than
+   chaining all three unverified.
+7. Playtest cold at both marking viewports; capture the one change that
    comes out of that (not out of re-reading the code) for `PROCESS.md`.
 
-Stop and checkpoint again after step 5 — that's the point where the game
-becomes finishable/loseable end-to-end, not just correct in a test file.
+Stop and checkpoint again after step 6 — that's the point where every
+item from the original MVP scope (Scope section above) is actually built,
+not just the core mechanic.
