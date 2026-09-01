@@ -110,49 +110,85 @@ Built and green (`pnpm check`: typecheck, build, 41 tests across 4 files):
   harness (a new function + its own tests + the debug tool now showing the
   distinction), not in a retry of the old approach.
 
-- **`src/scripts/track.ts`** — the one core rule, and a clarified mechanic:
-  corners and clicks are both plain **timestamps in seconds** (forward
-  speed is constant, so time stands in for distance — no separate distance
-  unit needed). **Updated by the redesign above:** a route's corner times
-  are no longer *every* onset straight from `rhythm.ts` — they're
-  `markTurns(onsets).filter(b => b.isTurn).map(b => b.time)`; the
-  non-turn beats become decoration in the renderer instead (see Route
-  shape below). `track.ts` itself needed no code change — `runRoute` only
-  ever consumed generic timestamps, so this is entirely a change to what
-  gets fed into it, not to the rule. `resolveCorner` checks one
-  click against one corner's tolerance window (`CORNER_TOLERANCE_SECONDS =
-  0.15`); `runRoute` replays a full click stream against a full route and
-  returns `"dead"` (with the failing corner index) or `"finished"`. A
-  stray click well before the next corner's window is treated as a death
-  at that corner, same as arriving too late or not clicking at all.
-  **Clarifies an ambiguity in the original mechanic description below**:
-  there's no independent left/right choice for the player to get wrong —
-  same as real Dancing Line, there's only one button, and every corner
-  always requires exactly one toggle (the corridor's shape determines
-  which way that toggle turns you, not the player). So the only thing the
-  player can get wrong is *when* they click, which is exactly what
-  `runRoute` checks. This is simpler than the `step(route, distance,
-  directionChoices)` signature originally sketched in Concrete technical
-  plan below, which assumed direction was a separate input — it isn't.
+- **`src/scripts/track.ts`** — the one core rule. **Rewritten after a
+  playtest correction** (see "Mechanic: real wall collision" below for the
+  full explanation) — the first version (`resolveCorner`/`runRoute`)
+  compared click *timestamps* to corner *timestamps* within a fixed
+  tolerance window, with the player's dot always rendered on the ideal
+  precomputed corridor regardless of how accurate the clicks were. That
+  matched none of "off the corridor = death" as originally scoped below —
+  a playtest showed clicks landing wrong with nothing visibly going wrong,
+  and separately caused a premature-death bug (judging a corner "missed"
+  the instant its nominal time passed, before a legitimately-late click's
+  own grace window had closed). The rule is now genuinely spatial:
+  `lateralOffset(cornerTimes, clickTimes, time, speed)` walks both the
+  ideal corridor and the player's own click-driven path forward (via
+  `route.ts`'s `walkTurns`, fed corner times and click times
+  respectively) and returns how far sideways the two have diverged at
+  `time`; `hasCrashed(..., halfWidth)` is `|lateralOffset| > halfWidth`.
+  Since both walks move at the same constant speed regardless of heading,
+  "sideways drift at the same elapsed time" is well-defined without full
+  polygon collision. `CORNER_TOLERANCE_SECONDS` is gone as a concept —
+  `CORRIDOR_HALF_WIDTH` (in `game.ts`) is now the *only* difficulty/visual
+  knob, since crossing it is what a wall hit literally means.
 - **`spec/game-rule.test.ts`** — the spec's required "one rule under a
-  focused automated test," importing `runRoute`/`resolveCorner` directly.
-  11 cases: exact/edge/outside tolerance, missing click, late click, a
-  stray early click, and an explicit "a wrong move is always possible"
-  case that drops exactly one click out of a 5-corner route and asserts
-  death, for every corner in turn — this is the test that backs the
-  spec's "losable" requirement, not just a unit test of convenience.
+  focused automated test," importing `hasCrashed`/`lateralOffset`
+  directly. Cases: perfect clicks never crash; an early or late click
+  within the divergence window (`halfWidth / speed`) survives; a click
+  further off than that crashes before the corner even arrives (the
+  "immediate failure on a mistimed click" behaviour); a missed click
+  drifts into a crash shortly after the corridor's own turn; a stray click
+  on a straight stretch crashes; an explicit "a wrong move is always
+  possible" case that drops exactly one click out of a 5-corner route and
+  asserts every one of them eventually crashes — this is the test that
+  backs the spec's "losable" requirement, not just a unit test of
+  convenience.
 
-One float-rounding fix worth knowing about if `resolveCorner` is touched
-again: comparing `Math.abs(clickAt - cornerAt) <= tolerance` fails at the
-exact boundary sometimes (e.g. `5 - 0.15` isn't exactly `4.85` in
-IEEE754) — there's a `+ 1e-9` epsilon in the comparison to absorb that;
-it's a rounding fix, not a gameplay looseness, don't remove it.
+**Not yet built:** the end-of-run zoom-out. That's step 5 below (step 4,
+the renderer + input loop, is built — see "Mechanic" below for its
+current shape).
 
-**Not yet built:** turning turn-times (and separately, decoration-times)
-into an actual left/right/visual route shape (needed by the renderer, not
-by `runRoute` — the pure rule only needs timestamps, direction is a
-rendering concern), the canvas renderer/input loop, and the end-of-run
-zoom-out. That's step 4 below.
+## Mechanic: real wall collision (redesign, supersedes the tolerance model above)
+
+Playtesting the step-4 renderer surfaced that the tolerance model above was
+a wrong simplification of the mechanic actually scoped in "The idea, as
+given" and "Feasibility" below (which already said: "a click reverses the
+current turn direction... if the corner direction doesn't match where the
+corridor actually turns, the dot goes off the corridor edge and dies") —
+the dot was always drawn on the ideal centerline no matter how a click
+landed, so "off the corridor and dies" was never actually implemented.
+This section is the corrected mechanic, now built:
+
+- The corridor (`route.points`) is unchanged: the fixed, beat-derived
+  sequence of 90°-turn segments, drawn as a thick stroked corridor whose
+  edges (±`CORRIDOR_HALF_WIDTH` from the centerline) are the walls.
+- The player's line has its **own live path**, independent of the
+  corridor: `route.ts`'s `walkTurns(clickTimes, elapsed)` walks it forward
+  at the same constant `ROUTE_SPEED`, turning 90° at every click —
+  correct or not. There's still only one button (no separate left/right
+  choice), so a click's only effect is *when* the line turns, never which
+  way.
+- Every frame, `track.ts`'s `hasCrashed(route.turnTimes, clickTimes,
+  elapsed, CORRIDOR_HALF_WIDTH)` measures how far sideways the line's
+  actual path has drifted from the corridor's centerline (projected onto
+  the corridor's current direction of travel) and ends the run the moment
+  that exceeds the corridor's half-width. A click that's early, late, or
+  never comes causes the two paths to diverge; divergence grows at a rate
+  of `ROUTE_SPEED` once the two are no longer moving in the same
+  direction, so a wrong click reaches the wall in `CORRIDOR_HALF_WIDTH /
+  ROUTE_SPEED` seconds (a fraction of a second at current numbers) —
+  small, uniform, and a genuine geometric consequence rather than a
+  tuned flag.
+- Rendering (`game.ts`): the dot and its trail are drawn at the line's own
+  simulated position, not the corridor's centerline, and the camera
+  follows that real dot — so a mistimed click is now visible on screen as
+  the dot drifting off the drawn corridor and crossing its edge, which is
+  what a wall hit is supposed to look like.
+- `CORRIDOR_HALF_WIDTH` in `game.ts` is now the single knob controlling
+  both how wide the corridor looks and how much timing slack a click
+  actually gets — the earlier bug (widening the corridor visually did
+  nothing to the actual hit judgment, since two different numbers were
+  responsible for each) can't recur, because there's only one number now.
 
 ## The idea, as given
 
@@ -191,7 +227,10 @@ is cheap in 2D canvas: represent the route as a polyline of straight
 segments meeting at turns; the player's dot moves along it at constant
 speed; a click reverses the current turn direction (left/right) at the next
 corner; if the corner direction doesn't match where the corridor actually
-turns, the dot goes off the corridor edge and dies. No 3D engine needed —
+turns, the dot goes off the corridor edge and dies — see "Mechanic: real
+wall collision" in Status above for exactly how this is now implemented
+(the first pass under-built this and was corrected after playtesting). No
+3D engine needed —
 Dancing Line's "3D" look is a skinned camera angle on what is mechanically
 a 2D forward-scroller; a top-down or fixed-angle 2D canvas view is faithful
 to the mechanic, not a simplification of it.
@@ -342,9 +381,10 @@ built (see Status above); 5–6 are the still-to-build route-shape step:
    audio playback.
 
 **Game state / the testable rule** — built as `src/scripts/track.ts`;
-see Status above for the actual shape (`resolveCorner` + `runRoute`,
-timestamp-based, no separate direction input). Matches the "no
-DOM/canvas/audio dependency" goal here.
+see "Mechanic: real wall collision" in Status above for the actual shape
+(`lateralOffset` + `hasCrashed`, built on `route.ts`'s `walkTurns`, no
+separate direction input). Matches the "no DOM/canvas/audio dependency"
+goal here.
 
 **Route shape for rendering** (still to build, e.g. in `rhythm.ts` or a
 new small module): beat times alone aren't a drawable path — need a step

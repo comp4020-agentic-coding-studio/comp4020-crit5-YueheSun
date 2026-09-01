@@ -51,8 +51,38 @@ const DEFAULT_MAX_DURATION_SECONDS = 60;
 type Vector = { x: number; y: number };
 
 /** Rotate a heading 90°: `right` is clockwise in screen coordinates (y grows downward). */
-function rotate(heading: Vector, right: boolean): Vector {
+export function rotate(heading: Vector, right: boolean): Vector {
   return right ? { x: -heading.y, y: heading.x } : { x: heading.y, y: -heading.x };
+}
+
+/**
+ * Walk forward at `speed`, turning 90° (alternating right/left, starting
+ * right) at each time in `turnTimes`, out to `duration`. This is the one
+ * definition of "what does a sequence of turn-instants look like as a
+ * path" — shared by the corridor's own ideal shape (fed beat-derived turn
+ * times below) and, in track.ts, the player's actual click-driven path
+ * (fed click times instead) — so both walk identically and only their
+ * *timestamps* can differ. `turnTimes` need not be pre-filtered to
+ * `<= duration`; only turns up to `duration` are applied.
+ */
+export function walkTurns(turnTimes: number[], duration: number, speed: number = ROUTE_SPEED): RoutePoint[] {
+  const points: RoutePoint[] = [{ time: 0, x: 0, y: 0 }];
+  let heading: Vector = { x: 0, y: -1 }; // start moving "up" the world
+  let turnRight = true;
+  for (const t of turnTimes) {
+    if (t > duration) break;
+    const prev = points[points.length - 1];
+    const dist = (t - prev.time) * speed;
+    points.push({ time: t, x: prev.x + heading.x * dist, y: prev.y + heading.y * dist });
+    heading = rotate(heading, turnRight);
+    turnRight = !turnRight;
+  }
+  const last = points[points.length - 1];
+  if (duration > last.time) {
+    const dist = (duration - last.time) * speed;
+    points.push({ time: duration, x: last.x + heading.x * dist, y: last.y + heading.y * dist });
+  }
+  return points;
 }
 
 /** Build the drawable route shape from marked beats. */
@@ -67,21 +97,7 @@ export function buildRouteShape(beats: Beat[], options: RouteShapeOptions = {}):
   // actual track (e.g. min(60, trackDuration)).
   const duration = maxDuration;
 
-  const points: RoutePoint[] = [{ time: 0, x: 0, y: 0 }];
-  let heading: Vector = { x: 0, y: -1 }; // start moving "up" the world
-  let turnRight = true;
-  for (const t of turnTimes) {
-    const prev = points[points.length - 1];
-    const dist = (t - prev.time) * speed;
-    points.push({ time: t, x: prev.x + heading.x * dist, y: prev.y + heading.y * dist });
-    heading = rotate(heading, turnRight);
-    turnRight = !turnRight;
-  }
-  const last = points[points.length - 1];
-  if (duration > last.time) {
-    const dist = (duration - last.time) * speed;
-    points.push({ time: duration, x: last.x + heading.x * dist, y: last.y + heading.y * dist });
-  }
+  const points = walkTurns(turnTimes, duration, speed);
 
   const decorations: Marker[] = relevant
     .filter((b) => !b.isTurn)
@@ -110,4 +126,25 @@ export function positionAtTime(points: RoutePoint[], time: number): { x: number;
   }
   const last = points[points.length - 1];
   return { x: last.x, y: last.y };
+}
+
+/**
+ * The (unit) direction of travel at a given time — the same bracketing
+ * segment `positionAtTime` would place `time` in. Used by track.ts to know
+ * which axis is "sideways" (toward a wall) at the corridor's current
+ * segment.
+ */
+export function headingAt(points: RoutePoint[], time: number): { x: number; y: number } {
+  if (points.length < 2) return { x: 0, y: -1 };
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    if (time <= b.time || i === points.length - 1) {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const length = Math.hypot(dx, dy);
+      return length > 0 ? { x: dx / length, y: dy / length } : { x: 0, y: -1 };
+    }
+  }
+  return { x: 0, y: -1 };
 }

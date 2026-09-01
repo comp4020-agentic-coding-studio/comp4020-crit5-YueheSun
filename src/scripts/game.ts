@@ -1,26 +1,26 @@
 // The actual game: loads a track, generates its route, and runs the
 // canvas renderer + input loop around track.ts's already-tested
-// runRoute/resolveCorner. This is where onset detection (rhythm.ts), turn
-// selection (rhythm.ts), route shape (route.ts), and the pure game rule
-// (track.ts) all come together for the first time — everything upstream of
-// this file is pure/tested; this file is the DOM/canvas/audio glue.
+// hasCrashed. This is where onset detection (rhythm.ts), turn selection
+// (rhythm.ts), route shape (route.ts), and the pure game rule (track.ts)
+// all come together for the first time — everything upstream of this file
+// is pure/tested; this file is the DOM/canvas/audio glue.
+//
+// The corridor (route.points) is the fixed, beat-derived shape. The
+// player's line is its own live path, walked forward from clickTimes (see
+// walkTurns in route.ts) — it only matches the corridor's shape when
+// clicks land where the corridor actually turns. hasCrashed checks every
+// frame whether the line has drifted sideways past the corridor's wall.
 //
 // Deliberately NOT included yet: the end-of-run zoom-to-top-down tween
 // (PLAN.md step 5) — that's the next step, after a human playtests this.
 
 import { loadMonoSamples, detectOnsets, markTurns } from "./rhythm";
-import { buildRouteShape, positionAtTime, ROUTE_SPEED } from "./route";
-import { runRoute } from "./track";
+import { buildRouteShape, positionAtTime, walkTurns } from "./route";
+import { hasCrashed } from "./track";
 
 const MAX_ROUTE_SECONDS = 60;
 const TRAIL_LENGTH = 240;
 const CORRIDOR_HALF_WIDTH = 34;
-// The actual forgiveness a player gets, derived from the visual corridor
-// width rather than track.ts's default — so "how wide the track looks" and
-// "how late/early a click can land" are the same knob, not two numbers that
-// can silently drift apart (the previous bug: widening the corridor changed
-// nothing about what actually counted as a hit).
-const CORNER_TOLERANCE_SECONDS = CORRIDOR_HALF_WIDTH / ROUTE_SPEED;
 
 type TerminalState = "dead" | "finished";
 
@@ -94,25 +94,12 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
   });
 
   function checkState() {
-    const due = route.turnTimes.filter((t) => t <= elapsed);
-    const result = runRoute(due, clickTimes, CORNER_TOLERANCE_SECONDS);
-    if (result.state === "dead") {
-      const cornerAt = due[result.failedAt!];
-      // due only means "the corner's nominal instant has passed" — that's
-      // not the same as "the player is out of time for it." A missing
-      // click (as opposed to one that already landed wrong) isn't a real
-      // failure until its own late-click window has actually closed;
-      // judging it the moment elapsed reaches the corner killed runs before
-      // a legitimately-late-but-in-tolerance click could ever land.
-      const hasClick = clickTimes.length > result.failedAt!;
-      const deadlinePassed = elapsed > cornerAt + CORNER_TOLERANCE_SECONDS;
-      if (hasClick || deadlinePassed) {
-        terminal = "dead";
-        audio.pause();
-      }
+    if (hasCrashed(route.turnTimes, clickTimes, elapsed, CORRIDOR_HALF_WIDTH)) {
+      terminal = "dead";
+      audio.pause();
       return;
     }
-    if (due.length === route.turnTimes.length && elapsed >= route.duration) {
+    if (elapsed >= route.duration) {
       terminal = "finished";
       audio.pause();
     }
@@ -130,7 +117,8 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
   function draw() {
     const width = window.innerWidth;
     const height = window.innerHeight;
-    const dot = positionAtTime(route.points, Math.min(elapsed, route.duration));
+    const clampedElapsed = Math.min(elapsed, route.duration);
+    const dot = positionAtTime(walkTurns(clickTimes, clampedElapsed), clampedElapsed);
 
     ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, width, height);
@@ -185,7 +173,8 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
   function loop() {
     if (!terminal) {
       elapsed = (performance.now() - startTimeMs) / 1000;
-      trail.push(positionAtTime(route.points, Math.min(elapsed, route.duration)));
+      const clampedElapsed = Math.min(elapsed, route.duration);
+      trail.push(positionAtTime(walkTurns(clickTimes, clampedElapsed), clampedElapsed));
       if (trail.length > TRAIL_LENGTH) trail.shift();
       checkState();
     }

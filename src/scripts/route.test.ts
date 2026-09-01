@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRouteShape, positionAtTime, ROUTE_SPEED } from "./route";
+import { buildRouteShape, positionAtTime, headingAt, walkTurns, ROUTE_SPEED } from "./route";
 import type { Beat } from "./rhythm";
 
 // Engineering confidence for the "turn timestamps -> drawable shape" step —
@@ -50,6 +50,39 @@ describe("buildRouteShape", () => {
     const shape = buildRouteShape([beat(1, true)], { maxDurationSeconds: 1, speed: 10 });
     const [start, turn] = shape.points;
     expect(Math.hypot(turn.x - start.x, turn.y - start.y)).toBeCloseTo(10);
+  });
+});
+
+describe("walkTurns", () => {
+  it("produces a straight tail with no turns at all", () => {
+    const points = walkTurns([], 3, 10);
+    expect(points).toHaveLength(2);
+    expect(points[1]).toEqual({ time: 3, x: 0, y: -30 });
+  });
+
+  it("segment length matches elapsed time times speed", () => {
+    const points = walkTurns([2], 2, 10);
+    const [start, turn] = points;
+    expect(Math.hypot(turn.x - start.x, turn.y - start.y)).toBeCloseTo(20);
+  });
+
+  it("only applies turns up to duration, without needing pre-filtered input", () => {
+    const points = walkTurns([1, 5, 9], 6, 10);
+    expect(points.map((p) => p.time)).toEqual([0, 1, 5, 6]);
+  });
+});
+
+describe("headingAt", () => {
+  it("stays on the starting heading before the first turn", () => {
+    const points = walkTurns([5], 10, 10);
+    expect(headingAt(points, 2)).toEqual({ x: 0, y: -1 });
+  });
+
+  it("rotates 90 degrees after a turn", () => {
+    const points = walkTurns([5], 10, 10);
+    const heading = headingAt(points, 8);
+    expect(heading.x).toBeCloseTo(1);
+    expect(heading.y).toBeCloseTo(0);
   });
 });
 
