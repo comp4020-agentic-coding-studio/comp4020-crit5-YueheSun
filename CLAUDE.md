@@ -18,6 +18,16 @@ which deliverable applies. Read both before you plan or build.
 - When a check fails, read its output before you change anything.
 - Never commit a red state.
 
+## Auto-commit
+
+Commit automatically whenever a feature is added, removed, or adjusted —
+don't wait to be asked each time. A "feature" boundary is a working,
+checked increment (e.g. one step of a manual-check sequence below, one
+item from `plan.md`'s next-steps list), not every individual file edit.
+Still never commit a red state (`pnpm check` must pass first), and this
+durable authorization doesn't extend to push, force-push, or history
+rewrites — those still need an explicit ask each time.
+
 ## Manual checks, one step at a time
 
 `pnpm check` proves internal consistency (types, build, the rules you
