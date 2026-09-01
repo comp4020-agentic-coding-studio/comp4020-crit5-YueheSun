@@ -27,17 +27,19 @@ const TRAIL_LENGTH = 240;
 // click can land, and delays death, all at once, because the crash check
 // (track.ts's hasCrashed) is purely spatial with no separate timing check.
 // This coupling is deliberate, not a thing to split apart later — see
-// PLAN.md's "Locked mechanic/UI invariants" section. 24/300 = 80ms here —
-// looser than the previous 12 (40ms) for more room to be wrong, still
-// under the ~100ms threshold past which click and death stop reading as
+// PLAN.md's "Locked mechanic/UI invariants" section. 28/300 = 93ms here —
+// widened again once the line itself gained real width (LINE_WIDTH below):
+// a narrower corridor made the line's own rendered edge visually poke past
+// the wall well before the centerline check actually crashed. Still under
+// the ~100ms threshold past which click and death stop reading as
 // simultaneous.
-const CORRIDOR_HALF_WIDTH = 24;
+const CORRIDOR_HALF_WIDTH = 28;
 // How long a decoration's flash lasts after the dot reaches it — the pulse
 // that proves the route is actually tied to this track's rhythm, not just
 // its turns (PLAN.md scope item 7).
 const PULSE_DURATION_SECONDS = 0.25;
 // Width of the player's own drawn line — clearly narrower than the corridor
-// (CORRIDOR_HALF_WIDTH*2 = 48) so it never looks like it fills the
+// (CORRIDOR_HALF_WIDTH*2 = 56) so it never looks like it fills the
 // corridor, but wide enough to read as an actual line with give, not a
 // point (PLAN.md round 6).
 const LINE_WIDTH = 14;
@@ -160,6 +162,15 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     ctx.beginPath();
     route.points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
     ctx.stroke();
+    // The *inner* (concave) side of each turn is still a sharp miter cross
+    // here — round join only rounds the outer side. A stamped disc at each
+    // vertex was tried and rejected (looks like a shape glued on top, not
+    // the wall's own geometry); the real fix is a geometry-level fillet on
+    // the corridor's actual boundary — see PLAN.md's round-7 note for the
+    // worked-out approach (build the offset boundary as a filled Path2D,
+    // rounded with an arc of radius CORRIDOR_HALF_WIDTH centered on the
+    // route's own vertex — same radius on both sides, so the visible wall
+    // never claims to be tighter or looser than hasCrashed's real hitbox).
 
     // Beat-synced pulse: every decoration is a faint dot always visible
     // (same "seeing it coming" affordance as the corridor itself), and
