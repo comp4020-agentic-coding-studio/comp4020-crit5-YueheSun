@@ -607,3 +607,34 @@ stay as-is.
 Stop and checkpoint again after step 6 — that's the point where every
 item from the original MVP scope (Scope section above) is actually built,
 not just the core mechanic.
+
+## Next-session work (requested, not started): gem rewards + death sound
+
+Two more items the user wants built in a future session, after step 6
+above is checked off — noted here now, deliberately not started this
+session:
+
+1. **Branching gem-reward mechanic.** Occasionally the route offers two
+   parallel paths forward instead of one: an easy path (straight, with
+   the normal decorative/non-turn beat markers on it) and a harder path
+   that turns those *same* decoration beats into actual required turn
+   points, with a gem placed on it. Taking the harder path and surviving
+   it collects the gem; each collected gem adds points shown on the
+   end-of-run results screen (step 6.3's summary screen, once built).
+   **Explicit constraint from the request:** the choice itself must stay
+   simple — the line never stops moving, so a player has only a couple of
+   turns to react to a branch appearing at all before it's decided by
+   default. This is a genuinely new mechanic (two co-existing corridors
+   instead of one), not a variation on the existing single-corridor
+   model — needs real design thought before implementation: how a branch
+   is chosen/generated from the beat data, how `route.ts`'s single
+   `points`/`turnTimes` shape extends to "two shapes for a stretch," and
+   how `track.ts`'s collision rule generalizes to "which of two corridors
+   is the player currently closest to" without breaking the existing
+   one-rule spec test. Don't start coding from this paragraph alone —
+   design it properly (probably its own PLAN.md section) before touching
+   `route.ts`/`track.ts`.
+2. **Impact sound effect on death.** Play a short sound the instant
+   `terminal` becomes `"dead"` in `game.ts`. Simple, additive, no design
+   questions — just needs an actual sound asset and a play() call
+   alongside the existing `audio.pause()` in `checkState()`.
