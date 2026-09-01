@@ -7,8 +7,10 @@
 //
 // Direction (left vs. right at each turn) is a rendering concern only — the
 // player never chooses a direction, just *when* to toggle (see track.ts) —
-// so this picks a simple, deterministic alternating zigzag rather than
-// anything gameplay-relevant.
+// so this picks a fixed, deterministic "designed" turn pattern (see
+// TURN_PATTERN below) rather than anything gameplay-relevant. A strict
+// ping-pong alternation (right, left, right, left, ...) turns out to look
+// like one repetitive staircase once drawn at speed, not a designed map.
 
 import type { Beat } from "./rhythm";
 
@@ -56,26 +58,42 @@ export function rotate(heading: Vector, right: boolean): Vector {
 }
 
 /**
- * Walk forward at `speed`, turning 90° (alternating right/left, starting
- * right) at each time in `turnTimes`, out to `duration`. This is the one
- * definition of "what does a sequence of turn-instants look like as a
- * path" — shared by the corridor's own ideal shape (fed beat-derived turn
- * times below) and, in track.ts, the player's actual click-driven path
- * (fed click times instead) — so both walk identically and only their
- * *timestamps* can differ. `turnTimes` need not be pre-filtered to
- * `<= duration`; only turns up to `duration` are applied.
+ * A fixed repeating unit of turn directions (true = right), applied by the
+ * turn's *index* in the sequence — never by its timestamp or by which walk
+ * (corridor vs. player) is asking. That's required: track.ts's
+ * lateralOffset calls walkTurns twice independently, once for the
+ * corridor's cornerTimes and once for the player's clickTimes, and the two
+ * only stay comparable if the same index always resolves to the same
+ * direction. Occasional back-to-back turns in the same direction (a 180°
+ * hairpin) break up what would otherwise be a uniform zigzag staircase.
+ */
+const TURN_PATTERN: readonly boolean[] = [true, true, false, true, false, false, true, false];
+
+function turnDirectionForIndex(index: number): boolean {
+  return TURN_PATTERN[index % TURN_PATTERN.length];
+}
+
+/**
+ * Walk forward at `speed`, turning 90° (direction from `turnDirectionForIndex`,
+ * by position in this sequence) at each time in `turnTimes`, out to
+ * `duration`. This is the one definition of "what does a sequence of
+ * turn-instants look like as a path" — shared by the corridor's own ideal
+ * shape (fed beat-derived turn times below) and, in track.ts, the player's
+ * actual click-driven path (fed click times instead) — so both walk
+ * identically and only their *timestamps* can differ. `turnTimes` need not
+ * be pre-filtered to `<= duration`; only turns up to `duration` are applied.
  */
 export function walkTurns(turnTimes: number[], duration: number, speed: number = ROUTE_SPEED): RoutePoint[] {
   const points: RoutePoint[] = [{ time: 0, x: 0, y: 0 }];
   let heading: Vector = { x: 0, y: -1 }; // start moving "up" the world
-  let turnRight = true;
+  let index = 0;
   for (const t of turnTimes) {
     if (t > duration) break;
     const prev = points[points.length - 1];
     const dist = (t - prev.time) * speed;
     points.push({ time: t, x: prev.x + heading.x * dist, y: prev.y + heading.y * dist });
-    heading = rotate(heading, turnRight);
-    turnRight = !turnRight;
+    heading = rotate(heading, turnDirectionForIndex(index));
+    index++;
   }
   const last = points[points.length - 1];
   if (duration > last.time) {
