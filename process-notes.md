@@ -62,3 +62,43 @@ the three or four that show real judgement.
 > accented beats; the other beats can be represented as visual decoration
 > on the map instead. Also, look into how the original Dancing Line
 > actually designed this more carefully."
+
+## Autonomous tuning stalled; human-specified exact corrections worked
+
+1. **What happened** — several rounds of timing/difficulty adjustment
+   were done as open-ended "make it feel better" passes: widen the
+   corridor, decouple the tolerance from the visual width, tune
+   `thresholdFactor`/spacing, and re-check via gap statistics or a quick
+   look, without the human pinning down the exact number or exact
+   moment that was wrong. That pattern (see `e6842cd`, `91e6e29`) took
+   several commits to actually land on a working tolerance model, and
+   the underlying design was still wrong underneath the patches (see the
+   note above and `2ef5c45`'s full redesign).
+2. **What worked instead** — once the human did the actual manual
+   observation (playtesting, listening) and came back with a precise,
+   falsifiable complaint — "the death time doesn't match the time of the
+   wrong click," not "the timing feels off" — the fix stopped being
+   guesswork. Instead of tuning by feel, the exact real constants
+   (`ROUTE_SPEED`, `CORRIDOR_HALF_WIDTH`) were plugged into
+   `lateralOffset` directly to compute the actual click-vs-death gap
+   (150ms, and showed a late click could register death *before* the
+   click itself), which pinpointed the root cause precisely enough to
+   pick a targeted correction — tighten both knobs together, not
+   guess-and-check one — verified by re-running the same computation
+   before touching any code the human would then have to re-test.
+3. **The lesson** — for interactions where correctness is about *feel*
+   (timing, difficulty, responsiveness), letting the AI self-tune
+   against its own proxy signals (stats, "looks reasonable") doesn't
+   converge — the human has to be the one supplying the ground truth
+   (an exact symptom, an exact timestamp), with the AI's job being to
+   turn that into a precise, verified diagnosis and fix rather than
+   another round of guessing. This is the same shape as the first entry
+   above (manual verification over automated proxies) but sharper: the
+   proxy that failed here wasn't a missing check, it was the AI
+   iterating on its own without a human-supplied ground truth to anchor
+   each round.
+4. **The citation** — the fix itself:
+   [`ef2dd49`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit5-YueheSun/commit/ef2dd49).
+   Contrast with the earlier undirected tuning rounds:
+   [`e6842cd`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit5-YueheSun/commit/e6842cd),
+   [`91e6e29`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit5-YueheSun/commit/91e6e29).
