@@ -112,26 +112,15 @@ describe("markTurns", () => {
   it("only the strongest onsets become turns right at the start of the track", () => {
     // Ten onsets at t=0, strengths spread across the range — with the
     // default startPercentile 0.9, only the very strongest should turn.
-    // minStartSeconds: 0 isolates the percentile ramp from the separate
-    // "no turns before minStartSeconds" floor, covered below.
+    // Turns are allowed from the very start of the track (no "just watch"
+    // window) — it's the percentile ramp alone that keeps the opening
+    // sparse.
     const strengths = [2, 3, 4, 5, 6, 7, 8, 9, 10, 20];
     const onsets = strengths.map((s) => onset(0, s));
-    const beats = markTurns(onsets, { minStartSeconds: 0 });
+    const beats = markTurns(onsets);
     const turnCount = beats.filter((b) => b.isTurn).length;
     expect(turnCount).toBeLessThanOrEqual(2);
     expect(beats[beats.length - 1].isTurn).toBe(true); // the strongest one
-  });
-
-  it("never turns before minStartSeconds, however strong the onset", () => {
-    // Same strength distribution, shifted before vs. at/after the floor —
-    // isolates minStartSeconds from the percentile ramp itself, which is
-    // what actually decides *which* onset qualifies (see the "only the
-    // strongest..." test above).
-    const strengths = [2, 3, 4, 5, 6, 7, 8, 9, 10, 20];
-    const early = markTurns(strengths.map((s) => onset(0, s)));
-    const late = markTurns(strengths.map((s) => onset(5, s)));
-    expect(early.some((b) => b.isTurn)).toBe(false);
-    expect(late[late.length - 1].isTurn).toBe(true);
   });
 
   it("admits more onsets as turns once the ramp finishes", () => {

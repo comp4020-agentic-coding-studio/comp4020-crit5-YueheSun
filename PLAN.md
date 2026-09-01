@@ -24,11 +24,11 @@ bugs (not preference calls):
    `strength` into nonsense. Fixed with `SILENCE_FLOOR_FRACTION = 0.02`
    (an onset candidate must also clear this fraction of the *track's own*
    mean windowed energy — track-agnostic, no fixed absolute amplitude).
-   On top of that, the user asked for an explicit "just watch" window
-   regardless of the silence gate's own timing — `TurnRampOptions.
-   minStartSeconds` (default **4.7s**, tuned down from an initial 5s
-   after listening) forces `isTurn: false` for any onset earlier than
-   this, unconditionally.
+   On top of that, the user initially asked for an explicit "just watch"
+   window (`TurnRampOptions.minStartSeconds`, 4.7s) forcing `isTurn: false`
+   before that point regardless of strength — **later removed** (see
+   round-3 below): turns are now allowed from t=0, gated only by the
+   percentile ramp itself.
 2. **Second-half blind spot** — a 0.5s rolling-average window is longer
    than several 16th notes at this tempo (0.156s each), so in a
    continuous, uniformly-loud run it stops seeing note-to-note attacks at
@@ -87,8 +87,8 @@ Built and green (`pnpm check`: typecheck, build, 41 tests across 4 files):
   min/mean/max = 0.38/1.28/3.92s, balanced across the track (first-half
   mean gap 1.22s, second-half 1.35s). Has its own colocated sanity tests
   (`src/scripts/rhythm.test.ts`, synthetic burst data, now covering
-  `markTurns`'s ramp behaviour, the silence floor, `minStartSeconds`, and
-  a dense evenly-loud burst train) — these are engineering confidence, not
+  `markTurns`'s ramp behaviour, the silence floor, and a dense
+  evenly-loud burst train) — these are engineering confidence, not
   the spec's required test (see next).
 
   **Design correction, found by using the verification tool, not by

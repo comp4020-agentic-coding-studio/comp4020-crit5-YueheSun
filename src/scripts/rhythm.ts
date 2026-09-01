@@ -154,15 +154,12 @@ export interface TurnRampOptions {
   startPercentile?: number;
   /** Required strength percentile once the ramp finishes — lower, so more (and weaker) onsets qualify as turns later on. */
   endPercentile?: number;
-  /** No onset before this many seconds ever becomes a turn, regardless of strength — a fixed, unconditional "just watch" window before the player has to do anything, on top of the percentile ramp. */
-  minStartSeconds?: number;
 }
 
 const DEFAULT_RAMP: Required<TurnRampOptions> = {
   rampSeconds: 30,
   startPercentile: 0.9,
   endPercentile: 0.45,
-  minStartSeconds: 4.7,
 };
 
 /**
@@ -187,7 +184,6 @@ export function markTurns(onsets: Onset[], options: TurnRampOptions = {}): Beat[
     return lo / sortedStrengths.length;
   };
   return onsets.map((onset) => {
-    if (onset.time < opts.minStartSeconds) return { ...onset, isTurn: false };
     const progress = opts.rampSeconds > 0 ? Math.min(onset.time / opts.rampSeconds, 1) : 1;
     const requiredPercentile = opts.startPercentile + (opts.endPercentile - opts.startPercentile) * progress;
     return { ...onset, isTurn: percentileOf(onset.strength) >= requiredPercentile };
