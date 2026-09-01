@@ -412,7 +412,10 @@ width, increase the corridor/collision tolerance a bit more" — done,
 `CORRIDOR_HALF_WIDTH` 24→28 (committed, see comment in `game.ts` for why:
 the line's own rendered edge was visually poking past the wall before the
 centerline check actually crashed). (2) "round the inner corner too" —
-**not yet done correctly; this is the current checkpoint.**
+**now done and confirmed live** (see below); an earlier pass claimed this
+was already correct and was wrong — see the corrected geometry below and
+`process-notes.md`'s "A 'confirmed' fix was wrong" entry for how that was
+caught.
 
 **Rejected attempt:** filling a disc of radius `CORRIDOR_HALF_WIDTH` at
 every interior `route.points` vertex, on top of the existing centerline
@@ -785,9 +788,11 @@ stay as-is.
 7. Playtest cold at both marking viewports; capture the one change that
    comes out of that (not out of re-reading the code) for `PROCESS.md`.
 
-**← current checkpoint.** Round 7 (the corridor's true geometric fillet)
-is done and confirmed live in the browser — see above. Step 6.3 (results
-screen) is next, then step 7 (cold playtest).
+**← current checkpoint.** Round 7 (the corridor's true geometric fillet,
+including the concave-side correction — see above and
+`process-notes.md`) is done, confirmed live in the browser, `pnpm check`
+green, and committed (`3363e93`). Step 6.3 (results screen) is next,
+then step 7 (cold playtest).
 
 ## Next-session work (requested, not started): gem rewards + death sound
 

@@ -132,3 +132,42 @@ the three or four that show real judgement.
    round 6 section was rewritten (not just appended to) to record *why*
    this shape of smoothing doesn't work, so a future attempt doesn't
    re-derive the same mistake from scratch.
+
+## A "confirmed" fix was wrong, and the bug hid behind a fill rule, not a code path
+
+1. **What happened** — an earlier claim that the corridor's inner corner
+   was rounded (committed as `4f26683`, with a PLAN.md entry describing a
+   screenshot as showing "both corners rounded with the same visible
+   radius") was false. The user pointed at a fresh screenshot and the
+   exact pixel where the corner was still a sharp 90°. Re-deriving the
+   geometry by hand found the actual bug: the code used the same
+   "arc centered on the route vertex" fillet for both sides of a turn,
+   which is only correct on the convex (outer) side. On the concave
+   (inner) side the true hitbox corner is already sharp — the fix's own
+   arc code ran without error, but the straight boundary segments on
+   either side of it still crossed at the old miter point regardless,
+   forming a tiny self-intersecting loop that `ctx.fill()`'s default
+   nonzero winding rule silently re-filled. The corner rendered exactly
+   as sharp as if no arc had been drawn at all — a bug with zero visible
+   symptom in the code, only in the rendered pixels.
+2. **What worked** — treating "verified" as a claim that needs evidence
+   at the same resolution as the bug, not a glance. Three escalating
+   checks: (a) an isolated, faithful reproduction of the *actual*
+   production function copy-pasted into a standalone test page, with a
+   pixel-sampled scan across the corner proving the fill was uncut; (b)
+   the same treatment for the corrected formula in isolation, for both
+   turn directions; (c) only then, a zoomed crop (not a full-page
+   screenshot glanced at) of the real running dev server's own corner.
+   Each step used markers/crops precise enough that "it looks rounded"
+   was a pixel fact, not an impression.
+3. **The lesson** — a plausible-looking screenshot is not evidence if it
+   wasn't looked at closely enough to falsify the specific claim being
+   made, and "the code runs without error" says nothing when the failure
+   mode is a fill-rule cancellation rather than a thrown exception or a
+   wrong number. The fix this time landed as a documented geometric
+   distinction in PLAN.md (convex vs. concave corners of the same turn
+   need different constructions) rather than just a corrected diff, so a
+   future pass doesn't have to rediscover it by getting burned the same
+   way.
+4. **The citation** — the fix itself: `3363e93`. Contrast with the
+   earlier, wrongly-confirmed attempt: `4f26683`.
