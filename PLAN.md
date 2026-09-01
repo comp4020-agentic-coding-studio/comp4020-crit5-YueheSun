@@ -405,7 +405,7 @@ if so, design it so the two segments' axes are never blended directly
 (e.g. easing the scalar `lateralOffset` value on a single, always-current
 axis, not lerping two perpendicular world-space points).
 
-## Round 7: rounding the corridor's *inner* corner (done)
+## Round 7: rounding the corridor's *inner* corner (done, corrected)
 
 Two requests from the same playtest message: (1) "since the line now has
 width, increase the corridor/collision tolerance a bit more" — done,
@@ -426,7 +426,8 @@ of how correct its radius is) — left only as a code comment pointing here.
 
 **The actual fix needs the corridor drawn as a filled offset polygon, not
 a stroked centerline.** Worked out the geometry by hand so the next pass
-doesn't have to re-derive it:
+doesn't have to re-derive it — **first pass below turned out to be
+wrong about the inner side specifically; corrected further down.**
 
 - At every interior vertex `V`, the corridor has two boundary lines run
   past it: the incoming segment's offset line (parallel to the incoming
@@ -437,63 +438,81 @@ doesn't have to re-derive it:
   perpendicular distance `h` from `V` itself** — regardless of which side
   (left/right) or which way the corridor turns there.
 - The *sharp* corner these two lines naturally form (where they cross, if
-  extended) sits at distance `h√2` from `V`, not `h` — on **both** the
-  outer side (already known — this is round 5's "~10 world unit miter
-  overshoot" note) **and** the inner side (not previously derived, but
-  same formula: a 90° miter always overshoots to `h√2` regardless of which
-  side of the offset is concave vs. convex for that turn).
-- Round 5's `lineJoin = "round"` fix only ever corrected the outer side,
-  because a stroke's round join is computed relative to the *stroke*, not
-  the underlying path — it has no way to also reshape the concave/inner
-  crossing, which a stroke just draws as a sharp intersection.
-- **The correct fillet, matching `hasCrashed`'s real hitbox exactly on
-  both sides:** since both boundary lines are already at distance `h` from
-  `V`, replace each sharp corner (inner *and* outer) with an arc of radius
-  `h`, *centered at `V` itself* — running between the two natural offset
-  points `V + h·lateral_in` and `V + h·lateral_out` (the perpendicular feet
-  from `V` onto each line — no miter-intersection math needed at all,
-  these are just the plain per-segment offset points already used
-  elsewhere). This is a strict generalization of round 5's round-join fix:
-  same construction (arc of radius `h` around `V`), just applied to both
-  offset boundaries instead of relying on stroke-join semantics that can
-  only reach one of them.
+  extended) sits at distance `h√2` from `V`, not `h` — on both sides,
+  arithmetically.
+- **Where the first pass went wrong:** it assumed that because both
+  offset lines sit at distance `h` from `V`, an arc of radius `h` centered
+  on `V` is the right fillet on *both* sides. That's only true on the
+  **convex** (outer) side of a turn. On the **concave** (inner) side, the
+  true hitbox — the actual Minkowski sum of the route polyline with a
+  radius-`h` disc, which is what `hasCrashed` checks against — has a
+  **sharp** corner at the miter point `M = V + h·(lateral_in+lateral_out)`,
+  not a circular arc around `V`: from that side's quadrant, the nearest
+  point on the route polyline is always on one of the two straight
+  segments, never `V` itself. So on the inner side, the sharp miter is
+  already geometrically correct, and "rounding" it is a cosmetic choice
+  (asked for anyway, to visually match the outer side — see below), not a
+  hitbox-accuracy fix.
+- Worse, reusing the V-centered arc construction on the inner side doesn't
+  just look wrong, it's **invisible**: the straight boundary segments
+  immediately before and after that vertex still pass through `M`
+  regardless of the arc drawn nearby, so the closed path develops a small
+  self-intersecting loop right at the corner. `ctx.fill()`'s default
+  nonzero winding rule re-fills that loop's area, exactly canceling the
+  arc's visual effect — the corner renders exactly as sharp as a plain
+  miter despite the arc code running. This — not a missing code path — is
+  why the original implementation of this round looked completely
+  unrounded on the inner side. Confirmed by an isolated, faithful
+  reproduction of the exact production code (copy-pasted verbatim into a
+  standalone Playwright/Firefox test page) plus a pixel-sampled diagonal
+  scan across the corner showing the fill uncut all the way to `M`.
+- **Correct concave-side fillet (radius `h`, per the user's cosmetic
+  request to match the outer side):** center the arc further out, at
+  `center = M + h·(lateral_in+lateral_out)`, tangent to the two offset
+  lines *beyond* `M` at `M + h·lateral_out` (on the incoming line) and
+  `M + h·lateral_in` (on the outgoing line) — using the 90°-turn-specific
+  fact that `lateral_out` is parallel to `heading_in` and `lateral_in` is
+  parallel to `heading_out`, so these tangent points really do lie further
+  along the same two offset lines, past `M`. Which side is concave at a
+  given vertex flips with the turn's own direction, so it's determined
+  generically via `crossZ(heading_in, heading_out) > 0` rather than by
+  threading `TURN_PATTERN`'s direction data into the renderer.
 
-**Implemented exactly as designed above:** `buildCorridorOutline(points,
-halfWidth): Path2D` now lives in `game.ts` (rendering-only geometry —
-`track.ts`/`route.ts` untouched). One closed `Path2D`: right-offset
-boundary start→end (straight `lineTo` between vertices, `arcBetween`
-around `V` at each interior vertex), a round end cap, the left-offset
-boundary end→start, a round start cap, `closePath()`. `arcBetween` picks
-the short 90° sweep generically via `Math.atan2` + signed-angle
-normalization (no hardcoded left/right case), confirmed correct by hand
-against a concrete `(0,-1)`-heading example before trusting it generally.
-The two end caps needed the same `anticlockwise=true` parameter, which
-isn't the mirror-image guess it looks like — also worked out by hand
-(see the code comments in `game.ts` for both derivations) rather than
-assumed. Computed once after `route` is built, replacing the old
-`ctx.stroke()` corridor block with a single `ctx.fill(corridorOutline)`.
+**Implemented as corrected:** `game.ts` has a `filletVertex` helper that
+branches on convex vs. concave per boundary-side per-vertex (`crossZ`
+test above) and applies the matching construction — the original
+V-centered arc on the convex side (unchanged from the first pass), the
+new M-relative arc on the concave side. `buildCorridorOutline` is
+otherwise structurally the same as the first pass described above (one
+closed `Path2D`, right boundary start→end, round end cap, left boundary
+end→start, round start cap, filled once with `ctx.fill()`).
 
-**Verified in the browser, not just typechecked:** `pnpm check` green
-(53 tests — unchanged, this is rendering-only and touches no tested
-module), then driven live via a throwaway Playwright+Firefox script
-(headless Chromium's system deps weren't installable without root in
-this container; Firefox needed only `libasound2t64`, fetched with
-`apt-get download` and pointed at via `LD_LIBRARY_PATH` rather than
-system-installed). A zoomed screenshot of the first real turn (crashed
-there with zero clicks, which conveniently freezes the camera right on
-top of it) shows **both** the outer corner (top-left, big convex arc)
-and the inner corner (the concave joint) rounded with the same visible
-radius in a single frame — the exact fix round 5's stroke-only rounding
-couldn't reach. Confirms the geometry derivation rather than just
-trusting it.
+**Verified in the browser, not just typechecked, and not just claimed —
+this is the second time this round was "confirmed" and the first claim
+was wrong, so the bar here is a precise zoomed screenshot, not a
+glance.** `pnpm check` green (53 tests, unchanged — rendering-only, no
+tested module touched). Live-verified via three escalating throwaway
+Playwright/Firefox scripts: (1) an isolated reproduction of the *original
+buggy* code, pixel-scanned to prove the self-intersection/winding
+cancellation described above; (2) an isolated test of the *new* formula
+alone; (3) a faithful reproduction of the *entire corrected* production
+code rendering both a right-turn and a left-turn test route, zoomed crops
+of each confirming clean, symmetric rounding with no artifacts. Finally,
+against the real running dev server itself: a zoomed crop of the first
+live turn shows the black playable area's boundary curving smoothly on
+the concave/inner side, at a radius visually matching the outer arc, with
+no leftover sharp point or self-intersection artifact.
 
-**Not re-verified per-direction:** only one concrete turn (a `true`/right
-entry in `TURN_PATTERN`) was screenshotted; a `false`/left turn wasn't
-separately confirmed live. Low risk — `arcBetween` and the two boundary
-walks apply identically regardless of `TURN_PATTERN`'s value at that
-index, with no direction-specific branch in the code — but flagging it
-here in case a future playtest ever reports an asymmetry between left-
-and right-turn corners specifically, so that's the first place to look.
+**Lesson for next time (worth keeping as a standing habit, not just a
+note about this bug):** a convex and a concave corner of the same turn
+are not the same problem wearing a mirror image — the concave side's
+*correct*, hitbox-accurate shape is already sharp, so "round it too" is
+cosmetic there in a way it isn't on the convex side, and copying one
+side's formula onto the other produced code that ran without error and
+still did nothing visible. The failure mode (nonzero-winding-rule
+self-cancellation) doesn't throw or fail a type check — the only way it
+was caught was a pixel-level check of the actual rendered fill, not a
+glance at a screenshot or a read of the code.
 
 ## The idea, as given
 

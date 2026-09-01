@@ -76,20 +76,93 @@ function arcBetween(path: Path2D, center: Vector, from: Vector, to: Vector, radi
   path.arc(center.x, center.y, radius, startAngle, startAngle + delta, delta < 0);
 }
 
+function crossZ(a: Vector, b: Vector): number {
+  return a.x * b.y - a.y * b.x;
+}
+
+/**
+ * Fillet one boundary line (`sign` = +1 for the "+lateral" offset, -1 for
+ * "-lateral") at interior route vertex `V`, appending to `path` — which
+ * must already be positioned at the point just before whichever of the
+ * two feet comes first in path order (`reverse` = true when this boundary
+ * is being walked end→start, as the left/-lateral loop does).
+ *
+ * A 90° turn puts this boundary in one of two genuinely different
+ * situations, and treating them the same was round 7's actual bug (see
+ * PLAN.md): on the *convex* side of the turn, the two straight offset
+ * lines fall short of meeting — the true hitbox rounds that corner with
+ * an arc of radius `h` centered on `V` itself, tangent to both lines at
+ * their natural feet (`V + sign*h*lateral`). On the *concave* side, the
+ * two lines cross **beyond** their feet, at a sharp point
+ * `M = V + sign*h*(lateralIn+lateralOut)` — and that sharp point already
+ * *is* the true, unrounded hitbox boundary (confirmed by hand: for a
+ * concave corner, Minkowski-summing the route polyline with a radius-`h`
+ * disc gives a hard corner at `M`, not a circle around `V` — the nearest
+ * point on the route from that side's near quadrant is always on one of
+ * the two straight segments, never `V`). Rounding it is therefore a pure
+ * cosmetic choice (made at the user's request, to match the convex
+ * side's look), and needs a *different* arc: centered further out from
+ * `M` by another `h` along the same offset directions, tangent to both
+ * lines beyond `M` rather than at `V`. Using the V-centered construction
+ * for this side (what round 7 originally shipped) doesn't just look
+ * wrong — the two straight segments before and after it still cross at
+ * `M` regardless, so the arc traces out a small loop that the fill's
+ * nonzero winding rule silently re-fills, leaving the corner exactly as
+ * sharp as an un-filleted miter.
+ *
+ * Which side is concave flips with the turn's own direction (a
+ * "+lateral" boundary is concave on a right turn, convex on a left turn,
+ * and vice versa for "-lateral") — determined here from the cross
+ * product of the two headings rather than threaded through as a separate
+ * parameter, since turn direction is otherwise not this function's
+ * concern.
+ */
+function filletVertex(
+  path: Path2D,
+  vertex: Vector,
+  headingIn: Vector,
+  headingOut: Vector,
+  sign: 1 | -1,
+  h: number,
+  reverse: boolean,
+): void {
+  const lateralIn = rotate(headingIn, true);
+  const lateralOut = rotate(headingOut, true);
+  const footIn = addScaled(vertex, lateralIn, sign * h);
+  const footOut = addScaled(vertex, lateralOut, sign * h);
+
+  const rightTurn = crossZ(headingIn, headingOut) > 0;
+  const concave = rightTurn === (sign === 1);
+
+  if (!concave) {
+    const first = reverse ? footOut : footIn;
+    const second = reverse ? footIn : footOut;
+    path.lineTo(first.x, first.y);
+    arcBetween(path, vertex, first, second, h);
+    return;
+  }
+
+  const miter = addScaled(footIn, lateralOut, sign * h); // V + sign*h*(lateralIn+lateralOut)
+  const tangentOnIncoming = addScaled(miter, lateralOut, sign * h); // further along footIn's line
+  const tangentOnOutgoing = addScaled(miter, lateralIn, sign * h); // further along footOut's line
+  const center = addScaled(tangentOnIncoming, lateralIn, sign * h);
+  const first = reverse ? tangentOnOutgoing : tangentOnIncoming;
+  const second = reverse ? tangentOnIncoming : tangentOnOutgoing;
+  path.lineTo(first.x, first.y);
+  arcBetween(path, center, first, second, h);
+}
+
 /**
  * The corridor as a filled offset polygon, not a stroked centerline — see
  * PLAN.md's round-7 note for why a stroke can't do this. Both boundaries
  * (the "right" one at +halfWidth along `rotate(heading, true)`, and the
  * "left" one at -halfWidth along the same axis — the exact axis
  * track.ts's hasCrashed measures against, so the drawn wall matches the
- * real hitbox on both sides, not just the outer one a round stroke join
- * used to cover) run past every vertex at exactly `halfWidth` from it
- * (that's what "offset by halfWidth" means), so each corner — inner and
- * outer alike — is filleted with a plain arc of that radius centered on
- * the vertex itself, connecting the two boundaries' natural offset feet.
- * No miter-intersection math anywhere, and no shape stamped on top of the
- * centerline: this *is* the wall's own outline. Computed once after the
- * route is built, not per frame — it's static for the whole run.
+ * real hitbox on both sides) are filleted at every interior vertex by
+ * `filletVertex` above — convex or concave, whichever that side actually
+ * is at that turn. No shape stamped on top of the centerline: this *is*
+ * the wall's own outline. Computed once after the route is built, not
+ * per frame — it's static for the whole run.
  */
 function buildCorridorOutline(points: RoutePoint[], halfWidth: number): Path2D {
   const path = new Path2D();
@@ -104,10 +177,7 @@ function buildCorridorOutline(points: RoutePoint[], halfWidth: number): Path2D {
   const rightStart = addScaled(points[0], rotate(headings[0], true), h);
   path.moveTo(rightStart.x, rightStart.y);
   for (let i = 1; i < n - 1; i++) {
-    const footIn = addScaled(points[i], rotate(headings[i - 1], true), h);
-    const footOut = addScaled(points[i], rotate(headings[i], true), h);
-    path.lineTo(footIn.x, footIn.y);
-    arcBetween(path, points[i], footIn, footOut, h);
+    filletVertex(path, points[i], headings[i - 1], headings[i], 1, h, false);
   }
   const rightEnd = addScaled(points[n - 1], rotate(headings[n - 2], true), h);
   path.lineTo(rightEnd.x, rightEnd.y);
@@ -122,10 +192,7 @@ function buildCorridorOutline(points: RoutePoint[], halfWidth: number): Path2D {
 
   // Left boundary (-halfWidth side), walked end -> start.
   for (let i = n - 2; i >= 1; i--) {
-    const footOut = addScaled(points[i], rotate(headings[i], true), -h);
-    const footIn = addScaled(points[i], rotate(headings[i - 1], true), -h);
-    path.lineTo(footOut.x, footOut.y);
-    arcBetween(path, points[i], footOut, footIn, h);
+    filletVertex(path, points[i], headings[i - 1], headings[i], -1, h, true);
   }
   const leftStart = addScaled(points[0], rotate(headings[0], true), -h);
   path.lineTo(leftStart.x, leftStart.y);
