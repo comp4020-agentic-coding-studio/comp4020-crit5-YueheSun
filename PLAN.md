@@ -405,6 +405,82 @@ if so, design it so the two segments' axes are never blended directly
 (e.g. easing the scalar `lateralOffset` value on a single, always-current
 axis, not lerping two perpendicular world-space points).
 
+## Round 7: rounding the corridor's *inner* corner (in progress)
+
+Two requests from the same playtest message: (1) "since the line now has
+width, increase the corridor/collision tolerance a bit more" — done,
+`CORRIDOR_HALF_WIDTH` 24→28 (committed, see comment in `game.ts` for why:
+the line's own rendered edge was visually poking past the wall before the
+centerline check actually crashed). (2) "round the inner corner too" —
+**not yet done correctly; this is the current checkpoint.**
+
+**Rejected attempt:** filling a disc of radius `CORRIDOR_HALF_WIDTH` at
+every interior `route.points` vertex, on top of the existing centerline
+stroke. Typechecked and played fine, but the user explicitly rejected the
+approach itself, not just the look: "I don't need a filled disc at the
+turn vertices... the inner corner of the path itself should have a rounded
+turn radius — like a border-radius applied directly to the wall geometry
+at the corner, not a circular shape stamped on top of the vertex." Reverted
+out of `game.ts` (a stamped shape isn't the wall's own outline, regardless
+of how correct its radius is) — left only as a code comment pointing here.
+
+**The actual fix needs the corridor drawn as a filled offset polygon, not
+a stroked centerline.** Worked out the geometry by hand so the next pass
+doesn't have to re-derive it:
+
+- At every interior vertex `V`, the corridor has two boundary lines run
+  past it: the incoming segment's offset line (parallel to the incoming
+  heading, at perpendicular distance `h = CORRIDOR_HALF_WIDTH`, on a given
+  side) and the outgoing segment's offset line (same, for the outgoing
+  heading). Because *both* offset lines are literally defined as "distance
+  `h` from a line passing through `V`," **both are always at exact
+  perpendicular distance `h` from `V` itself** — regardless of which side
+  (left/right) or which way the corridor turns there.
+- The *sharp* corner these two lines naturally form (where they cross, if
+  extended) sits at distance `h√2` from `V`, not `h` — on **both** the
+  outer side (already known — this is round 5's "~10 world unit miter
+  overshoot" note) **and** the inner side (not previously derived, but
+  same formula: a 90° miter always overshoots to `h√2` regardless of which
+  side of the offset is concave vs. convex for that turn).
+- Round 5's `lineJoin = "round"` fix only ever corrected the outer side,
+  because a stroke's round join is computed relative to the *stroke*, not
+  the underlying path — it has no way to also reshape the concave/inner
+  crossing, which a stroke just draws as a sharp intersection.
+- **The correct fillet, matching `hasCrashed`'s real hitbox exactly on
+  both sides:** since both boundary lines are already at distance `h` from
+  `V`, replace each sharp corner (inner *and* outer) with an arc of radius
+  `h`, *centered at `V` itself* — running between the two natural offset
+  points `V + h·lateral_in` and `V + h·lateral_out` (the perpendicular feet
+  from `V` onto each line — no miter-intersection math needed at all,
+  these are just the plain per-segment offset points already used
+  elsewhere). This is a strict generalization of round 5's round-join fix:
+  same construction (arc of radius `h` around `V`), just applied to both
+  offset boundaries instead of relying on stroke-join semantics that can
+  only reach one of them.
+
+**Concrete next step:** write a `buildCorridorOutline(points, halfWidth):
+Path2D` (in `game.ts`, since it's rendering-only geometry — `track.ts`'s
+`lateralOffset`/`hasCrashed` and `route.ts`'s `walkTurns` model instantaneous
+90° turns for game logic and should stay untouched, this is purely about
+what gets drawn). Build it as one closed path: walk the "right offset"
+boundary start→end (straight `lineTo` between vertices, arc-around-`V`
+per the construction above at each interior vertex), a round end-cap
+semicircle, the "left offset" boundary end→start, a round start-cap
+semicircle, then `closePath()`. Compute it once after `route` is built
+(it's static for the whole run, unlike the old per-frame stroke rebuild),
+and replace the current `ctx.stroke()` corridor block in `draw()` with a
+single `ctx.fill(corridorOutline)`. Watch the arc sweep direction (each
+arc must sweep the *short* 90° way between its two endpoints, not the long
+270° way — work it out with `Math.atan2` + a signed-shortest-angle
+normalization, don't assume `ctx.arc`'s default direction is right without
+checking a concrete case by hand). Verify with `pnpm check`, then an
+actual look in the browser (this is a geometry/visual judgment call, not a
+pass/fail test) before committing — don't trust the derivation alone,
+per `CLAUDE.md`.
+
+**← current checkpoint.** Update this file again once the fillet is
+implemented and confirmed, then `/clear` and reload `@PLAN.md`.
+
 ## The idea, as given
 
 Dancing-Line-style game: parse the rhythm of a music track to generate a
@@ -652,41 +728,35 @@ stay as-is.
    `game.ts`'s `draw()` never reads `route.decorations` at all right now
    — folded into step 5 below since it's the same "polish the live view"
    pass.
-5. ~~Playtest round-3 fixes~~ — done this round: `minStartSeconds`
-   removed (turns allowed from t=0), corridor narrowed + sharpened
+5. ~~Playtest round-3 fixes~~ — done: `minStartSeconds` removed (turns
+   allowed from t=0), corridor narrowed + sharpened
    (`CORRIDOR_HALF_WIDTH` 34→20→12, miter corners), designed turn
    pattern (`TURN_PATTERN` replacing strict alternation), and the
    click-to-death timing lag tightened (`ROUTE_SPEED` 140→300) — see
    Status above for all four.
-   **← current checkpoint. Update this file, `/clear`, reload
-   `@PLAN.md` before continuing with step 6.**
 6. **Enrich mechanics + polish the UI** (user's stated next direction,
    scoped to the still-open MVP items rather than anything new):
-   1. Render the beat-synced pulse from `route.decorations` (Scope item
-      7, computed but undrawn — see step 4 note above) — flash/recolour
-      the corridor or a marker at each decoration's position as the dot
-      passes it.
-   2. **Progress markers at 20%/40%/60%/80% of the route** — visible
-      landmarks on the corridor (or a HUD readout) at those fractions of
-      `route.duration`, so a player can see how far through the run they
-      are.
-   3. **End-of-run results/summary screen** — the still-undone
+   1. ~~Render the beat-synced pulse from `route.decorations`~~ — done,
+      `game.ts`'s `draw()` reads `route.decorations` (faint always-on dot
+      + brightening ring as the player passes each one).
+   2. ~~Progress markers~~ — done as a top-of-screen bar + percentage
+      readout in `draw()`, not on-corridor landmarks, but same purpose
+      (a player can see how far through the run they are).
+   3. **End-of-run results/summary screen — still not built.** The
       end-of-run zoom-out from "The idea, as given" and Scope item 4:
       on `terminal !== null`, tween the camera out to frame the whole
       traveled path top-down (use the existing `trail`/dot-path data,
       already top-down so this is a pan/zoom tween, not a new rendering
       mode — see Feasibility above), plus basic run stats (time
       survived / finished, how far along the route, maybe click count).
-   Build and manually-check these as separate small steps per
-   `CLAUDE.md` (each is a feel/visual judgment call, not a pass/fail
-   assertion) — playtest each before starting the next, rather than
-   chaining all three unverified.
 7. Playtest cold at both marking viewports; capture the one change that
    comes out of that (not out of re-reading the code) for `PROCESS.md`.
 
-Stop and checkpoint again after step 6 — that's the point where every
-item from the original MVP scope (Scope section above) is actually built,
-not just the core mechanic.
+**← current checkpoint** is actually round 7 above (the corridor's inner
+corner needs a true geometric fillet, not the rejected stamped-disc
+approach) — pick that up first, since it was mid-implementation when this
+session ended. Step 6.3 (results screen) and step 7 (cold playtest) are
+next after that, both still open.
 
 ## Next-session work (requested, not started): gem rewards + death sound
 
