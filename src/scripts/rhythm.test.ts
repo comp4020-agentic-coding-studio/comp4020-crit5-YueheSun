@@ -74,6 +74,30 @@ describe("detectOnsets", () => {
     const onsets = detectOnsets(samples, SAMPLE_RATE, { thresholdFactor: 1.2, minSpacingSeconds: 0.2 });
     expect(onsets.length).toBeGreaterThan(0);
   });
+
+  it("finds an onset per note in a dense, evenly-loud run", () => {
+    // Bursts spaced 0.16s apart (~a 16th note at a brisk tempo), similar
+    // amplitude — a continuous run with no big dynamic contrast. A rolling
+    // average window longer than the note spacing sees this as one flat
+    // plateau and stops registering rises; the default window (0.15s) is
+    // short enough to see each attack.
+    const burstTimes = [2, 2.16, 2.32, 2.48, 2.64, 2.8, 2.96, 3.12, 3.28, 3.44];
+    const samples = bufferWithBurstsAt(4, burstTimes, 0.05);
+    const onsets = detectOnsets(samples, SAMPLE_RATE, { minSpacingSeconds: 0.1 });
+    expect(onsets.length).toBeGreaterThanOrEqual(burstTimes.length - 1);
+  });
+
+  it("ignores a near-silent artifact before the music actually starts", () => {
+    // A single stray sample, orders of magnitude quieter than the real
+    // burst that follows — e.g. mp3 decode dither during a silent lead-in.
+    // Without an absolute silence floor, dividing by the near-zero local
+    // average during true silence turns this into a huge (bogus) strength.
+    const samples = bufferWithBurstsAt(4, [3]);
+    samples[Math.round(0.5 * SAMPLE_RATE)] = 1e-6;
+    const onsets = detectOnsets(samples, SAMPLE_RATE);
+    expect(onsets).toHaveLength(1);
+    expect(onsets[0].time).toBeGreaterThanOrEqual(3);
+  });
 });
 
 describe("markTurns", () => {
@@ -88,12 +112,26 @@ describe("markTurns", () => {
   it("only the strongest onsets become turns right at the start of the track", () => {
     // Ten onsets at t=0, strengths spread across the range — with the
     // default startPercentile 0.9, only the very strongest should turn.
+    // minStartSeconds: 0 isolates the percentile ramp from the separate
+    // "no turns before minStartSeconds" floor, covered below.
     const strengths = [2, 3, 4, 5, 6, 7, 8, 9, 10, 20];
     const onsets = strengths.map((s) => onset(0, s));
-    const beats = markTurns(onsets);
+    const beats = markTurns(onsets, { minStartSeconds: 0 });
     const turnCount = beats.filter((b) => b.isTurn).length;
     expect(turnCount).toBeLessThanOrEqual(2);
     expect(beats[beats.length - 1].isTurn).toBe(true); // the strongest one
+  });
+
+  it("never turns before minStartSeconds, however strong the onset", () => {
+    // Same strength distribution, shifted before vs. at/after the floor —
+    // isolates minStartSeconds from the percentile ramp itself, which is
+    // what actually decides *which* onset qualifies (see the "only the
+    // strongest..." test above).
+    const strengths = [2, 3, 4, 5, 6, 7, 8, 9, 10, 20];
+    const early = markTurns(strengths.map((s) => onset(0, s)));
+    const late = markTurns(strengths.map((s) => onset(5, s)));
+    expect(early.some((b) => b.isTurn)).toBe(false);
+    expect(late[late.length - 1].isTurn).toBe(true);
   });
 
   it("admits more onsets as turns once the ramp finishes", () => {

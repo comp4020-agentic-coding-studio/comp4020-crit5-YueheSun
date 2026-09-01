@@ -35,10 +35,25 @@ export interface OnsetDetectionOptions {
 
 const DEFAULT_OPTIONS: Required<OnsetDetectionOptions> = {
   windowSeconds: 0.02,
-  averageWindowSeconds: 0.5,
-  thresholdFactor: 1.5,
+  // Short enough to resolve individual note attacks in a dense, continuous
+  // 16th-note run (~0.15s apart at a brisk tempo) instead of averaging a
+  // whole run into one flat plateau it can no longer see rises against.
+  averageWindowSeconds: 0.15,
+  thresholdFactor: 1.2,
   minSpacingSeconds: 0.35,
 };
+
+/**
+ * A window can only be an onset candidate if its energy also clears this
+ * fraction of the *track's own* mean windowed energy — on top of the
+ * relative-ratio check below. Without it, true (or near-)silence produces
+ * a near-zero `localAverage`, so a single stray sample (mp3 decode
+ * artifact, fade-in dither) divided by that near-zero average yields an
+ * enormous ratio and gets mistaken for a huge accent. Scaling by the
+ * track's own mean energy keeps this track-agnostic — no fixed absolute
+ * amplitude to tune per track.
+ */
+const SILENCE_FLOOR_FRACTION = 0.02;
 
 export interface Onset {
   /** Seconds since the start of the track. */
@@ -53,7 +68,8 @@ export function detectOnsets(samples: Float32Array, sampleRate: number, options:
   const windowSize = Math.max(1, Math.round(opts.windowSeconds * sampleRate));
   const energy = windowedEnergy(samples, windowSize);
   const averageSpan = Math.max(1, Math.round(opts.averageWindowSeconds / opts.windowSeconds));
-  const candidates = pickOnsetCandidates(energy, averageSpan, opts.thresholdFactor);
+  const silenceFloor = meanOf(energy) * SILENCE_FLOOR_FRACTION;
+  const candidates = pickOnsetCandidates(energy, averageSpan, opts.thresholdFactor, silenceFloor);
   const onsets = candidates.map(({ index, strength }) => ({ time: index * opts.windowSeconds, strength }));
   return thinOnsets(onsets, opts.minSpacingSeconds);
 }
@@ -83,6 +99,7 @@ function pickOnsetCandidates(
   energy: Float32Array,
   averageSpan: number,
   thresholdFactor: number,
+  silenceFloor: number,
 ): { index: number; strength: number }[] {
   const candidates: { index: number; strength: number }[] = [];
   let wasAboveThreshold = false;
@@ -93,11 +110,18 @@ function pickOnsetCandidates(
     const count = i - start;
     const localAverage = count > 0 ? sum / count : energy[i];
     const strength = energy[i] / Math.max(localAverage, 1e-9);
-    const isAbove = energy[i] > 0 && strength > thresholdFactor;
+    const isAbove = energy[i] > silenceFloor && strength > thresholdFactor;
     if (isAbove && !wasAboveThreshold) candidates.push({ index: i, strength });
     wasAboveThreshold = isAbove;
   }
   return candidates;
+}
+
+function meanOf(values: Float32Array): number {
+  if (values.length === 0) return 0;
+  let sum = 0;
+  for (const v of values) sum += v;
+  return sum / values.length;
 }
 
 /**
@@ -130,12 +154,15 @@ export interface TurnRampOptions {
   startPercentile?: number;
   /** Required strength percentile once the ramp finishes — lower, so more (and weaker) onsets qualify as turns later on. */
   endPercentile?: number;
+  /** No onset before this many seconds ever becomes a turn, regardless of strength — a fixed, unconditional "just watch" window before the player has to do anything, on top of the percentile ramp. */
+  minStartSeconds?: number;
 }
 
 const DEFAULT_RAMP: Required<TurnRampOptions> = {
   rampSeconds: 30,
   startPercentile: 0.9,
   endPercentile: 0.45,
+  minStartSeconds: 4.7,
 };
 
 /**
@@ -160,6 +187,7 @@ export function markTurns(onsets: Onset[], options: TurnRampOptions = {}): Beat[
     return lo / sortedStrengths.length;
   };
   return onsets.map((onset) => {
+    if (onset.time < opts.minStartSeconds) return { ...onset, isTurn: false };
     const progress = opts.rampSeconds > 0 ? Math.min(onset.time / opts.rampSeconds, 1) : 1;
     const requiredPercentile = opts.startPercentile + (opts.endPercentile - opts.startPercentile) * progress;
     return { ...onset, isTurn: percentileOf(onset.strength) >= requiredPercentile };

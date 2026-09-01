@@ -5,9 +5,60 @@ build plan: reasoning behind decisions, current state, and next steps for
 whoever (agent or me) picks this up next. Update it at phase boundaries, then
 `/clear` and reload with `@PLAN.md`, per `CLAUDE.md`.
 
-## Status (updated after the accent/ramp redesign — see bottom)
+## Status (turn design confirmed good enough by the user — see bottom; step 4 is next)
 
-Built and green (`pnpm check`: typecheck, build, 38 tests across 4 files):
+**Resolved as of this update.** The accent/ramp version was re-checked
+against the debug tool and the user gave three concrete complaints: turns
+started immediately at track-start instead of waiting for the music to
+actually begin; the second half was too sparse; and to look at how
+Dancing Line spaces turns relative to tempo. Rather than guess at tuning
+knobs, the real track was decoded outside the browser (ffmpeg via a
+throwaway Python venv) and `detectOnsets`/`markTurns` re-run in Python
+against it to get hard numbers, and the user's score PDF
+(`src/assets/music/萤火虫之怨.pdf`, ♩=96, continuous 16th-note
+figuration) was read for context. That surfaced two distinct, confirmed
+bugs (not preference calls):
+
+1. **Bogus early "turns"** — true silence before the first note produces
+   a near-zero `localAverage`; dividing a near-zero energy by it inflates
+   `strength` into nonsense. Fixed with `SILENCE_FLOOR_FRACTION = 0.02`
+   (an onset candidate must also clear this fraction of the *track's own*
+   mean windowed energy — track-agnostic, no fixed absolute amplitude).
+   On top of that, the user asked for an explicit "just watch" window
+   regardless of the silence gate's own timing — `TurnRampOptions.
+   minStartSeconds` (default **4.7s**, tuned down from an initial 5s
+   after listening) forces `isTurn: false` for any onset earlier than
+   this, unconditionally.
+2. **Second-half blind spot** — a 0.5s rolling-average window is longer
+   than several 16th notes at this tempo (0.156s each), so in a
+   continuous, uniformly-loud run it stops seeing note-to-note attacks at
+   all (confirmed: zero onset candidates for a 13s stretch at
+   t≈88.5–101s, at any threshold). This was a wrong assumption in the
+   algorithm (averaging timescale picked without reference to note rate),
+   not a constant to tune. Fixed by shrinking
+   `DEFAULT_OPTIONS.averageWindowSeconds` 0.5→0.15 and `thresholdFactor`
+   1.5→1.2. Verified against the real track: onsets 100→229, the dead
+   88.5–101s stretch now has regular turns, turn-gap balance is close
+   across the whole track (first-half mean gap 1.22s, second-half 1.35s;
+   max gap down from 20s to 3.92s).
+
+No published Dancing-Line turn-spacing numbers exist (searched); general
+rhythm-charting practice confirms the ramp *shape* (strong-beats-only →
+near-every-note as difficulty/time increases) but supplied no number to
+import directly — the ramp above already had that shape.
+
+**User's final verdict on this round:** second half is dense enough now,
+and "honestly the whole track looks a bit too dense at this point" —
+but explicitly said to leave it as-is and move on to step 4, planning to
+keep tuning once the renderer exists to look at. So the plan's Step 3
+(local/windowed percentile instead of one whole-track percentile, plus a
+max-gap backstop) was **not implemented** — noted below as deferred, not
+abandoned, since "a bit too dense overall" is the opposite direction from
+what Step 3 would have fixed (it only guarantees a max gap, it doesn't
+reduce density). If density comes up again, look at `startPercentile`/
+`endPercentile` or `thresholdFactor` first, not Step 3.
+
+Built and green (`pnpm check`: typecheck, build, 41 tests across 4 files):
 
 - **`src/scripts/rhythm.ts`** — onset detection, as scoped below, **plus an
   accent/turn-selection layer added after playtesting the verification
@@ -32,10 +83,12 @@ Built and green (`pnpm check`: typecheck, build, 38 tests across 4 files):
   visual+audio verification tool, `src/scripts/rhythm-debug.ts`, mounted
   from `main.ts` (`import.meta.env.DEV`-gated, tree-shaken out of the
   production build — confirmed by grepping `dist/`, nothing rhythm-related
-  survives the build). Raw onset count: 104, gap min/mean/max =
-  0.44/1.48/13.18s. Has its own colocated sanity tests
+  survives the build). After the round-2 fixes below: 229 onsets, turn-gap
+  min/mean/max = 0.38/1.28/3.92s, balanced across the track (first-half
+  mean gap 1.22s, second-half 1.35s). Has its own colocated sanity tests
   (`src/scripts/rhythm.test.ts`, synthetic burst data, now covering
-  `markTurns`'s ramp behaviour too) — these are engineering confidence, not
+  `markTurns`'s ramp behaviour, the silence floor, `minStartSeconds`, and
+  a dense evenly-loud burst train) — these are engineering confidence, not
   the spec's required test (see next).
 
   **Design correction, found by using the verification tool, not by
@@ -335,10 +388,16 @@ stay as-is.
    `src/assets/music/闫东炜 - 萤火虫の怨.mp3`, matches the glob pattern.
 2. ~~Write `rhythm.ts` + sanity-check it~~ — done, see Status above.
 3. ~~Write the pure rule + its spec test~~ — done, see Status above.
-   **← current checkpoint. Update this file, `/clear`, reload `@PLAN.md`
-   before continuing to step 4** — the mechanic is now real and tested;
-   everything past this point is renderer/presentation work that consumes
-   it, a clean context boundary.
+3.5. ~~Add accent detection + a difficulty ramp so only strong onsets
+   require a turn~~ — done, see Status above (`markTurns`); re-checked
+   with the debug tool a second time, two real bugs found and fixed
+   (silence gate + `minStartSeconds`, shortened averaging timescale — see
+   Status above), user confirmed the result is good enough to build on.
+   Step 3 of the round-2 fix plan (local/windowed percentile + max-gap
+   backstop) was explicitly deferred, not done — see Status above for why
+   and what to reach for instead if density comes up again.
+   **← current checkpoint, now resolved. Update this file, `/clear`,
+   reload `@PLAN.md` before continuing with step 4.**
 4. Turn onset times into a drawable route shape (see Concrete technical
    plan above), then build the canvas renderer + input loop around
    `runRoute`/`resolveCorner`. Include the beat-synced pulse and fading
