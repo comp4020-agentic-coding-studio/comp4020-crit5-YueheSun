@@ -25,11 +25,19 @@ main {
   border: 0;
 }
 
+/* position:fixed + inset:0 pins the canvas to the viewport unconditionally
+   --- not dependent on the html/body/main percentage-height chain, which on
+   some browsers left a sliver uncovered where clicks landed on bare
+   document instead of the game (reported as "clicks only register inside
+   the track"). */
 #game {
   display: block;
+  position: fixed;
+  inset: 0;
   width: 100vw;
   height: 100vh;
   touch-action: none;
+  cursor: pointer;
 }
 
 a {

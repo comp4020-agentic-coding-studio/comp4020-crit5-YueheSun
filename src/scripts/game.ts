@@ -15,7 +15,7 @@ import { runRoute, CORNER_TOLERANCE_SECONDS } from "./track";
 const MAX_ROUTE_SECONDS = 60;
 const TRAIL_LENGTH = 240;
 const BEAT_PULSE_WINDOW_SECONDS = 0.1;
-const CORRIDOR_HALF_WIDTH = 18;
+const CORRIDOR_HALF_WIDTH = 34;
 
 type TerminalState = "dead" | "finished";
 
@@ -124,8 +124,7 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     const height = window.innerHeight;
     const dot = positionAtTime(route.points, Math.min(elapsed, route.duration));
 
-    const flash = nearestBeatFlash();
-    ctx.fillStyle = flash > 0 ? `rgb(${20 + flash * 30}, ${20 + flash * 30}, ${30 + flash * 60})` : "#111";
+    ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, width, height);
 
     ctx.save();
@@ -133,7 +132,11 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
 
     // Corridor: the whole known route, drawn ahead and behind — seeing the
     // path coming is the reference game's own affordance, not a shortcut.
-    ctx.strokeStyle = "#3a3f4b";
+    // The beat pulse lives here (not as a full-screen flash, which read as
+    // distracting) — it brightens the corridor itself at each detected beat.
+    const flash = nearestBeatFlash();
+    const c = 58 + Math.round(flash * 110);
+    ctx.strokeStyle = flash > 0 ? `rgb(${c}, ${c}, ${c + 20})` : "#3a3f4b";
     ctx.lineWidth = CORRIDOR_HALF_WIDTH * 2;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
