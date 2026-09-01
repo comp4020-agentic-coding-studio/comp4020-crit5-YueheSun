@@ -70,4 +70,16 @@ describe("lateralOffset / hasCrashed", () => {
   it("an empty route with no clicks never crashes", () => {
     expect(hasCrashed([], [], 10, HALF_WIDTH, SPEED)).toBe(false);
   });
+
+  it("a survived near-miss at one corner doesn't shrink tolerance at the next corner", () => {
+    // Corner 1: click 0.18s early — a residual of 1.8, just under HALF_WIDTH
+    // (2), survivable on its own. Corner 2: click 0.06s late on its own —
+    // also survivable on its own (residual 0.6). Under the old model these
+    // two residuals summed (2.4 > 2) and crashed even though neither click
+    // was individually too far off; per-corner memory should discard
+    // corner 1's already-survived residual once corner 2 begins.
+    const corners = [5, 6];
+    const clicks = [5 - 0.9 * WINDOW, 6 + 0.3 * WINDOW];
+    expect(hasCrashed(corners, clicks, 6.5, HALF_WIDTH, SPEED)).toBe(false);
+  });
 });

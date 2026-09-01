@@ -168,7 +168,10 @@ This section is the corrected mechanic, now built:
   at the same constant `ROUTE_SPEED`, turning 90° at every click —
   correct or not. There's still only one button (no separate left/right
   choice), so a click's only effect is *when* the line turns, never which
-  way.
+  way. **Superseded by round 6 below:** the line is no longer *drawn* at
+  this raw position — `track.ts`'s `linePosition` re-centers it onto the
+  corridor at the start of every segment, so only within-segment drift is
+  ever visible or judged.
 - Every frame, `track.ts`'s `hasCrashed(route.turnTimes, clickTimes,
   elapsed, CORRIDOR_HALF_WIDTH)` measures how far sideways the line's
   actual path has drifted from the corridor's centerline (projected onto
@@ -324,6 +327,83 @@ out over corner sharpness. If corner sharpness comes up again, the bevel
 `miterLimit` (tested, not shipped) is the documented middle ground, not a
 fresh idea to reinvent — but don't reach for miter again without also
 addressing this overshoot.
+
+## Round 6: a survived near-miss shouldn't tighten the next turn
+
+Playtest report: "if the previous turn was an edge-hugging near-miss, the
+path in between hugs the wall, making the *next* turn much more likely to
+crash — even with a good click there." Player's own hypothesis: Dancing
+Line re-centers the line onto the corridor after each turn, so a past
+near-miss can't eat into a future turn's tolerance. Confirmed this by
+tracing `lateralOffset`'s actual math, not just by feel:
+
+- `lateralOffset` computed the corridor's and the line's positions as one
+  continuous walk from `t=0` (`walkTurns`), took their raw world-space
+  difference, and projected it onto the corridor's *current* heading.
+  Once both are moving in the same direction, that raw difference is
+  **constant** — it neither grows nor shrinks — until the next turn.
+  Because every turn is exactly 90°, "forward along the old segment"
+  always becomes "sideways on the new segment," so *any* leftover timing
+  error from turn N carried forward as a **permanent, undiminishing**
+  sideways offset going into turn N+1 — a perfectly-timed click at N+1
+  didn't reduce it, and a same-direction (hairpin) turn N+1 stacked its
+  own fresh error on top additively.
+- Worked example (`ROUTE_SPEED=300`, `CORRIDOR_HALF_WIDTH=24`): an early
+  click leaving an 18-unit residual (survivable alone) followed by an
+  independently-survivable 6-unit-late click at the next corner summed to
+  24+ under the old model and crashed — even though neither click was
+  individually too far off. Confirmed as a real, provable bug, not a
+  tuning/feel issue, and confirmed the player's Dancing-Line hypothesis is
+  the right shape of fix.
+
+**Fix — per-segment baseline reset (`track.ts`):** `lateralOffset` now
+finds `segmentStart`, the corridor's most recent turn at or before `time`
+(0 if none yet), and subtracts the same raw line-vs-corridor difference
+evaluated *at that instant* before projecting onto the lateral axis. This
+is exactly zero the moment a segment begins — discarding whatever
+residual came before — and grows only from what happens within the
+current segment. `hasCrashed` is unchanged (still `abs(lateralOffset(...))
+> halfWidth`); only what "offset" means shifted, from "total drift since
+t=0" to "drift since this turn." Verified against every existing
+`spec/game-rule.test.ts` case (all single-corner, or all-but-one-exact
+scenarios where the baseline is always zero anyway — unaffected) plus a
+new regression case built from the worked example above, which used to
+crash and now survives.
+
+**Rendering re-centers too, via a new `track.ts` export,
+`linePosition`:** the drawn dot is now `corridorPos(time) +
+lateralOffset(...) * lateralAxis(time)` — always tracking the corridor's
+own forward progress exactly (both move at identical constant speed, so
+there's never a meaningful ahead/behind to show), deviating only by the
+same sideways amount the crash check uses. `game.ts`'s dot and trail both
+switched from raw `positionAtTime(walkTurns(clickTimes, t), t)` to this.
+Keeping render and judgment as one source of truth is the same principle
+round 5 above established the hard way. The dot visibly **snaps** back to
+centerline the instant each turn completes, rather than carrying visible
+drift across it — this is deliberate, not a placeholder (see below).
+
+**Line width, and a tried/reverted smoothing tween:** the player's line
+also gained real rendered width (`game.ts`'s `LINE_WIDTH = 14`, drawn as a
+connected round-joined ribbon rather than a chain of small dots) after a
+playtest report that the centerline snap read as a jarring
+jerk/shake. The first attempt at fixing that *feel* complaint added a
+`RECENTER_SECONDS` eased blend to `linePosition`, sliding from the
+previous segment's own trailing offset to the new segment's. This was
+reverted: because a 90° turn rotates the whole coordinate frame, the old
+segment's sideways axis and the new segment's sideways axis are
+*perpendicular*, so a straight-line blend between offsets measured on
+each one drew a visible diagonal cut across the inside of every
+corner — the reported "45° angle," which made the inner corner
+noticeably easier to clip. It served no gameplay purpose (confirmed by
+re-deriving the axis relationship by hand) and was removed outright
+rather than patched, per this file's own "check whether the design is
+wrong before reaching for a tuning knob" guidance — `linePosition` is
+back to the plain instantaneous formula above. The line's new width is
+what's left addressing the original feel complaint; re-test that in the
+browser before deciding whether the snap still needs a smoothing pass, and
+if so, design it so the two segments' axes are never blended directly
+(e.g. easing the scalar `lateralOffset` value on a single, always-current
+axis, not lerping two perpendicular world-space points).
 
 ## The idea, as given
 

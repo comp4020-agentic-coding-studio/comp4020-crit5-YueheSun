@@ -102,3 +102,33 @@ the three or four that show real judgement.
    Contrast with the earlier undirected tuning rounds:
    [`e6842cd`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit5-YueheSun/commit/e6842cd),
    [`91e6e29`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit5-YueheSun/commit/91e6e29).
+
+## A rendering fix was reverted, not patched, once traced to a design flaw
+
+1. **What happened** — round 6's per-segment offset reset (fixing a real
+   crash-tolerance bug) made the drawn dot snap instantly to centerline at
+   every turn. A playtest report ("screen jerks/shakes at every turn")
+   led to a smoothing tween (`RECENTER_SECONDS`, easing between the old
+   segment's trailing offset and the new segment's) that shipped without
+   re-entering plan mode, on the judgment that it was rendering-only. The
+   very next playtest flagged a new, worse symptom: "why did the
+   direction change become a 45-degree angle... makes it very easy to hit
+   the inner corner," with an explicit conditional — revert to 90° turns
+   if the diagonal serves no purpose.
+2. **What worked** — instead of reaching for a tuning knob (shortening
+   the ease window, capping the blend distance), the two endpoints of the
+   blend were re-derived by hand: because a 90° turn rotates the whole
+   coordinate frame, the previous segment's sideways axis and the new
+   segment's sideways axis are *perpendicular*, so a straight-line blend
+   between offsets measured on each one necessarily draws a diagonal
+   across the corner — confirmed as the root cause, not a side effect of
+   an implementation slip that a parameter tweak could paper over. The
+   fix was to delete the blend outright, not shrink or reshape it.
+3. **The lesson** — a "rendering-only" follow-up to a core-rule fix still
+   deserves the same rigor as the rule itself once a human reports it
+   feels wrong twice in a row; the second report ("if it serves no
+   purpose, revert") is exactly the kind of falsifiable complaint that
+   turns a vague feel problem into a checkable geometric claim. PLAN.md's
+   round 6 section was rewritten (not just appended to) to record *why*
+   this shape of smoothing doesn't work, so a future attempt doesn't
+   re-derive the same mistake from scratch.

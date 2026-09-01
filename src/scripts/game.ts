@@ -6,17 +6,18 @@
 // is pure/tested; this file is the DOM/canvas/audio glue.
 //
 // The corridor (route.points) is the fixed, beat-derived shape. The
-// player's line is its own live path, walked forward from clickTimes (see
-// walkTurns in route.ts) — it only matches the corridor's shape when
-// clicks land where the corridor actually turns. hasCrashed checks every
-// frame whether the line has drifted sideways past the corridor's wall.
+// player's line is drawn via track.ts's linePosition — the corridor's own
+// position at each instant, offset sideways by however far off-center the
+// player's clicks have drifted *this turn* (see track.ts for why that
+// offset resets every turn, not just at the start of a run). hasCrashed
+// checks every frame against that same offset.
 //
 // Deliberately NOT included yet: the end-of-run zoom-to-top-down tween
 // (PLAN.md step 5) — that's the next step, after a human playtests this.
 
 import { loadMonoSamples, detectOnsets, markTurns } from "./rhythm";
-import { buildRouteShape, positionAtTime, walkTurns } from "./route";
-import { hasCrashed } from "./track";
+import { buildRouteShape } from "./route";
+import { hasCrashed, linePosition } from "./track";
 
 const MAX_ROUTE_SECONDS = 60;
 const TRAIL_LENGTH = 240;
@@ -35,6 +36,11 @@ const CORRIDOR_HALF_WIDTH = 24;
 // that proves the route is actually tied to this track's rhythm, not just
 // its turns (PLAN.md scope item 7).
 const PULSE_DURATION_SECONDS = 0.25;
+// Width of the player's own drawn line — clearly narrower than the corridor
+// (CORRIDOR_HALF_WIDTH*2 = 48) so it never looks like it fills the
+// corridor, but wide enough to read as an actual line with give, not a
+// point (PLAN.md round 6).
+const LINE_WIDTH = 14;
 
 type TerminalState = "dead" | "finished";
 
@@ -132,7 +138,7 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     const width = window.innerWidth;
     const height = window.innerHeight;
     const clampedElapsed = Math.min(elapsed, route.duration);
-    const dot = positionAtTime(walkTurns(clickTimes, clampedElapsed), clampedElapsed);
+    const dot = linePosition(route.turnTimes, clickTimes, clampedElapsed);
 
     ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, width, height);
@@ -178,13 +184,19 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
       }
     }
 
-    // Fading trail of where the dot has actually been.
-    for (let i = 0; i < trail.length; i++) {
+    // The player's line, drawn with actual width (not a chain of dots) —
+    // gives the line some visual give at a turn instead of reading as a
+    // bare point relocating.
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (let i = 1; i < trail.length; i++) {
       const alpha = (i + 1) / trail.length;
-      ctx.fillStyle = `rgba(255, 214, 92, ${alpha * 0.8})`;
+      ctx.strokeStyle = `rgba(255, 214, 92, ${alpha * 0.8})`;
+      ctx.lineWidth = LINE_WIDTH;
       ctx.beginPath();
-      ctx.arc(trail[i].x, trail[i].y, 3, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
+      ctx.lineTo(trail[i].x, trail[i].y);
+      ctx.stroke();
     }
 
     // The dot itself.
@@ -194,6 +206,28 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     ctx.fill();
 
     ctx.restore();
+
+    // Progress readout (PLAN.md step 6.2) — a thin bar + percentage fixed to
+    // the top of the screen, in screen space (drawn after ctx.restore(), so
+    // it doesn't pan/zoom with the world like the corridor does). Lets a
+    // player tell how far through the run they are without it competing for
+    // attention with the corridor itself.
+    const progress = route.duration > 0 ? clampedElapsed / route.duration : 0;
+    const barMargin = 24;
+    const barWidth = width - barMargin * 2;
+    const barHeight = 4;
+    const barY = 20;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.fillRect(barMargin, barY, barWidth, barHeight);
+    ctx.fillStyle = "#ffd65c";
+    ctx.fillRect(barMargin, barY, barWidth * progress, barHeight);
+    const percentLabel = `${Math.round(progress * 100)}%`;
+    ctx.font = "13px monospace";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+    ctx.textBaseline = "top";
+    ctx.textAlign = "right";
+    ctx.fillText(percentLabel, barMargin + barWidth, barY + barHeight + 6);
+    ctx.textAlign = "left";
 
     // Playback-time readout for pinpointing exactly where a bad death
     // happens — dev-only, stripped from the production build (see
@@ -216,7 +250,7 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     if (!terminal) {
       elapsed = (performance.now() - startTimeMs) / 1000;
       const clampedElapsed = Math.min(elapsed, route.duration);
-      trail.push(positionAtTime(walkTurns(clickTimes, clampedElapsed), clampedElapsed));
+      trail.push(linePosition(route.turnTimes, clickTimes, clampedElapsed));
       if (trail.length > TRAIL_LENGTH) trail.shift();
       checkState();
     }
