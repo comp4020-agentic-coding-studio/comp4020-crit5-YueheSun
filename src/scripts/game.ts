@@ -9,13 +9,18 @@
 // (PLAN.md step 5) — that's the next step, after a human playtests this.
 
 import { loadMonoSamples, detectOnsets, markTurns } from "./rhythm";
-import { buildRouteShape, positionAtTime } from "./route";
-import { runRoute, CORNER_TOLERANCE_SECONDS } from "./track";
+import { buildRouteShape, positionAtTime, ROUTE_SPEED } from "./route";
+import { runRoute } from "./track";
 
 const MAX_ROUTE_SECONDS = 60;
 const TRAIL_LENGTH = 240;
-const BEAT_PULSE_WINDOW_SECONDS = 0.1;
 const CORRIDOR_HALF_WIDTH = 34;
+// The actual forgiveness a player gets, derived from the visual corridor
+// width rather than track.ts's default — so "how wide the track looks" and
+// "how late/early a click can land" are the same knob, not two numbers that
+// can silently drift apart (the previous bug: widening the corridor changed
+// nothing about what actually counted as a hit).
+const CORNER_TOLERANCE_SECONDS = CORRIDOR_HALF_WIDTH / ROUTE_SPEED;
 
 type TerminalState = "dead" | "finished";
 
@@ -92,8 +97,19 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     const due = route.turnTimes.filter((t) => t <= elapsed);
     const result = runRoute(due, clickTimes, CORNER_TOLERANCE_SECONDS);
     if (result.state === "dead") {
-      terminal = "dead";
-      audio.pause();
+      const cornerAt = due[result.failedAt!];
+      // due only means "the corner's nominal instant has passed" — that's
+      // not the same as "the player is out of time for it." A missing
+      // click (as opposed to one that already landed wrong) isn't a real
+      // failure until its own late-click window has actually closed;
+      // judging it the moment elapsed reaches the corner killed runs before
+      // a legitimately-late-but-in-tolerance click could ever land.
+      const hasClick = clickTimes.length > result.failedAt!;
+      const deadlinePassed = elapsed > cornerAt + CORNER_TOLERANCE_SECONDS;
+      if (hasClick || deadlinePassed) {
+        terminal = "dead";
+        audio.pause();
+      }
       return;
     }
     if (due.length === route.turnTimes.length && elapsed >= route.duration) {
@@ -111,14 +127,6 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
   window.addEventListener("resize", resizeCanvas);
   resizeCanvas();
 
-  function nearestBeatFlash(): number {
-    let closest = Infinity;
-    for (const t of route.turnTimes) closest = Math.min(closest, Math.abs(elapsed - t));
-    for (const d of route.decorations) closest = Math.min(closest, Math.abs(elapsed - d.time));
-    if (closest >= BEAT_PULSE_WINDOW_SECONDS) return 0;
-    return 1 - closest / BEAT_PULSE_WINDOW_SECONDS;
-  }
-
   function draw() {
     const width = window.innerWidth;
     const height = window.innerHeight;
@@ -132,11 +140,7 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
 
     // Corridor: the whole known route, drawn ahead and behind — seeing the
     // path coming is the reference game's own affordance, not a shortcut.
-    // The beat pulse lives here (not as a full-screen flash, which read as
-    // distracting) — it brightens the corridor itself at each detected beat.
-    const flash = nearestBeatFlash();
-    const c = 58 + Math.round(flash * 110);
-    ctx.strokeStyle = flash > 0 ? `rgb(${c}, ${c}, ${c + 20})` : "#3a3f4b";
+    ctx.strokeStyle = "#3a3f4b";
     ctx.lineWidth = CORRIDOR_HALF_WIDTH * 2;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
