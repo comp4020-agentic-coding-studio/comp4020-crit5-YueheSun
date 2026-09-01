@@ -23,17 +23,19 @@ import "../styles/styles.css";
 
   </head>
   <body>
-    <header>
+    <!--
+      No instructions on screen, per the C5 brief: the opening screen is just
+      the game, already moving. nav + h1 stay in the markup (invariants.test.ts
+      requires both) but are visually hidden via .sr-only.
+    -->
+    <header class="sr-only">
       <nav aria-label="Primary">
         <a href="./">Home</a>
       </nav>
+      <h1>Rhythm line</h1>
     </header>
     <main>
-      <h1>COMP4020 prototype</h1>
-      <p>
-        Replace this with your prototype. This week's brief is on the course website;
-        <code>spec/README.md</code> explains how the checks in this repo relate to it.
-      </p>
+      <canvas id="game" aria-label="Rhythm line game"></canvas>
     </main>
     <script src="../scripts/main.ts"></script>
   </body>
