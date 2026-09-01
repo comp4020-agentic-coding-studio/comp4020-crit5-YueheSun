@@ -18,6 +18,34 @@ which deliverable applies. Read both before you plan or build.
 - When a check fails, read its output before you change anything.
 - Never commit a red state.
 
+## Manual checks, one step at a time
+
+`pnpm check` proves internal consistency (types, build, the rules you
+thought to write a test for) — not that the thing behaves right against
+reality. Anything where correctness is a judgment call rather than a
+pass/fail assertion — a generated map, a difficulty curve, timing/feel,
+anything parsed or synthesized from real-world input — needs a human to
+actually look at or listen to the real output before more gets built on
+top of it.
+
+- Break that kind of work into steps small enough that each one produces
+  something checkable — a rendering, a number stream, a short recording —
+  before starting the next step. Don't chain several unverified
+  assumptions together and only check at the end: when it's wrong, you
+  won't know which step broke it, and unwinding costs more the longer you
+  waited.
+- Build a small dev-only tool for the check when a console log or a
+  static number isn't enough to judge it — e.g. something that lets a
+  human see *and* hear generated output against the real source at the
+  same time. Gate it out of the production build (`import.meta.env.DEV`
+  or equivalent) and confirm it's actually stripped from `dist/`.
+- Ask for the manual check explicitly and wait for the verdict before
+  moving to the next step; don't assume a plausible-looking number means
+  the step is done.
+- When a manual check turns up a problem, check whether the *design* is
+  wrong before reaching for a tuning knob — a threshold tweak can hide a
+  bad assumption instead of fixing it.
+
 ## The stack
 
 Converted to Astro (`comp4020:stack` course default). `astro.config.ts` sets
