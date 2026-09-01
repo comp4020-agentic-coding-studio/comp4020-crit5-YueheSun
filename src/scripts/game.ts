@@ -20,7 +20,7 @@ import { hasCrashed } from "./track";
 
 const MAX_ROUTE_SECONDS = 60;
 const TRAIL_LENGTH = 240;
-const CORRIDOR_HALF_WIDTH = 34;
+const CORRIDOR_HALF_WIDTH = 20;
 
 type TerminalState = "dead" | "finished";
 
@@ -130,7 +130,8 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     // path coming is the reference game's own affordance, not a shortcut.
     ctx.strokeStyle = "#3a3f4b";
     ctx.lineWidth = CORRIDOR_HALF_WIDTH * 2;
-    ctx.lineJoin = "round";
+    ctx.lineJoin = "miter";
+    ctx.miterLimit = 2; // segments only ever meet at 90°, so miters never spike
     ctx.lineCap = "round";
     ctx.beginPath();
     route.points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
