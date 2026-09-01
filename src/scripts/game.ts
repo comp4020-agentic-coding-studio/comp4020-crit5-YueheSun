@@ -144,8 +144,12 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     // path coming is the reference game's own affordance, not a shortcut.
     ctx.strokeStyle = "#3a3f4b";
     ctx.lineWidth = CORRIDOR_HALF_WIDTH * 2;
-    ctx.lineJoin = "miter";
-    ctx.miterLimit = 2; // segments only ever meet at 90°, so miters never spike
+    // Round, not miter: a round join's outer boundary is a literal arc of
+    // radius CORRIDOR_HALF_WIDTH around the vertex, so it matches the actual
+    // hitbox (hasCrashed's perpendicular distance) exactly at every corner —
+    // a miter overshoots the true hitbox by ~10 world units at a 90° turn
+    // (see PLAN.md), which read as "looks safe, isn't."
+    ctx.lineJoin = "round";
     ctx.lineCap = "round";
     ctx.beginPath();
     route.points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));

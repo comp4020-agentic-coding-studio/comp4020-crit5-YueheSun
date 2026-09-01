@@ -222,7 +222,10 @@ same playtest:
   `ctx.lineJoin = "round"` to `"miter"` with `ctx.miterLimit = 2`
   (`game.ts`) — safe as a hard miter because every corridor segment
   meets the next at exactly 90°, so a miter never spikes the way it
-  could at an arbitrary angle.
+  could at an arbitrary angle. **Reversed in round 5 below** — the
+  miter turned out to visually overshoot the real hitbox at every
+  corner, and playtest preferred correctness there over the sharper
+  look.
 - *"The map should look actually designed, not a repetitive
   alternating left-right zigzag."* `route.ts`'s `walkTurns` picked
   direction by flipping a `turnRight` boolean every turn — a strict
@@ -271,6 +274,56 @@ later tuning pass doesn't undo them without an explicit ask:
    play, not just in theory. Don't slow the world down or widen the render
    lookahead to make more track visible at once — that trades away the
    "quick judgment on reveal" difficulty this game is testing.
+
+## Round 5: corridor corner rendering vs. the real hitbox
+
+Playtest report: "sometimes it looks like the line hasn't hit the wall,
+but it still registers as a failure." Investigated as analysis first
+(not a tuning-knob reflex — CLAUDE.md's "check whether the design is
+wrong before reaching for a tuning knob"), by checking the actual math
+against ground truth rather than guessing:
+
+- **Ruled out:** the earlier "click doesn't take effect until the next
+  turn point" bug (round-3's original `resolveCorner`/`runRoute` model)
+  reappearing. Grepped for any deferred/queued-click code path — none
+  exists; `walkTurns` applies every click at its own exact timestamp,
+  confirmed by reading it directly.
+- **Ruled out:** a logic bug in `lateralOffset`/`hasCrashed` themselves.
+  Numerically compared their output against a from-scratch "true
+  distance to nearest point on the corridor polyline" calculation across
+  early/late/missed clicks and hairpins — exact agreement in every case.
+- **Found, but not the cause here:** `turnDirectionForIndex` (`route.ts`)
+  picks direction by a click's *position in the array*, not by which
+  corridor corner it was meant to answer. Missing one click permanently
+  shifts every later click's direction reference by one `TURN_PATTERN`
+  slot — a real direction desync, not just a timing slip. Currently
+  unreachable in practice: a missed click already crashes the run within
+  `CORRIDOR_HALF_WIDTH / ROUTE_SPEED` (≈80ms), before a later click's
+  wrong index can ever matter. Left as-is — flagging here so a future
+  change to the crash-recovery behaviour doesn't unknowingly wake this
+  up.
+- **Actual cause:** `game.ts`'s corridor stroke used `lineJoin = "miter"`
+  (round-3, for a sharper look). For a 90° turn, a full miter's outer tip
+  sits `CORRIDOR_HALF_WIDTH × √2` from the vertex — at `CORRIDOR_HALF_WIDTH
+  = 24` that's ≈33.9 vs. 24, a ~10-world-unit (~33ms at `ROUTE_SPEED`)
+  overshoot *only* at the outside of every turn. `hasCrashed` has no
+  knowledge of this bulge — it's still plain perpendicular distance to the
+  corridor's current segment — so right at a turn the drawn wall reached
+  further out than the line actually being checked. That's exactly "looks
+  fine, registers dead."
+
+Tried `miterLimit` low enough to force a bevel fallback (a flat corner
+chamfer, smaller overshoot than a full miter) as a middle ground that
+would keep round-3's "not too rounded" look. Playtest verdict: go back to
+full round joins instead — `lineJoin = "round"` makes the rendered
+boundary a literal arc of radius `CORRIDOR_HALF_WIDTH` around the vertex,
+which matches `hasCrashed`'s real hitbox exactly, zero overshoot. This
+knowingly re-introduces the "too rounded" look round-3 moved away from;
+between the two round-3/round-5 complaints, matching the real hitbox won
+out over corner sharpness. If corner sharpness comes up again, the bevel
+`miterLimit` (tested, not shipped) is the documented middle ground, not a
+fresh idea to reinvent — but don't reach for miter again without also
+addressing this overshoot.
 
 ## The idea, as given
 
