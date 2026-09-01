@@ -20,10 +20,21 @@ import { hasCrashed } from "./track";
 
 const MAX_ROUTE_SECONDS = 60;
 const TRAIL_LENGTH = 240;
-// Wrong-click-to-death lag is CORRIDOR_HALF_WIDTH / ROUTE_SPEED (route.ts) —
-// 12/300 = 40ms here, under the ~100ms simultaneity threshold so a wrong
-// click reads as immediate rather than delayed.
-const CORRIDOR_HALF_WIDTH = 12;
+// Also the timing tolerance for a click, and the wrong-click-to-death lag —
+// the same single number, since both are CORRIDOR_HALF_WIDTH / ROUTE_SPEED
+// (route.ts): widening this widens the corridor, loosens how far off a
+// click can land, and delays death, all at once, because the crash check
+// (track.ts's hasCrashed) is purely spatial with no separate timing check.
+// This coupling is deliberate, not a thing to split apart later — see
+// PLAN.md's "Locked mechanic/UI invariants" section. 24/300 = 80ms here —
+// looser than the previous 12 (40ms) for more room to be wrong, still
+// under the ~100ms threshold past which click and death stop reading as
+// simultaneous.
+const CORRIDOR_HALF_WIDTH = 24;
+// How long a decoration's flash lasts after the dot reaches it — the pulse
+// that proves the route is actually tied to this track's rhythm, not just
+// its turns (PLAN.md scope item 7).
+const PULSE_DURATION_SECONDS = 0.25;
 
 type TerminalState = "dead" | "finished";
 
@@ -139,6 +150,29 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     ctx.beginPath();
     route.points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
     ctx.stroke();
+
+    // Beat-synced pulse: every decoration is a faint dot always visible
+    // (same "seeing it coming" affordance as the corridor itself), and
+    // brightens into an expanding ring right as the dot reaches its time —
+    // turns aren't the only onsets the rhythm pass found, this is what
+    // makes the quieter stretches between turns still visibly on-beat.
+    for (const marker of route.decorations) {
+      const dt = clampedElapsed - marker.time;
+      ctx.fillStyle = "rgba(142, 207, 255, 0.35)";
+      ctx.beginPath();
+      ctx.arc(marker.x, marker.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (dt >= 0 && dt <= PULSE_DURATION_SECONDS) {
+        const progress = dt / PULSE_DURATION_SECONDS;
+        const alpha = 1 - progress;
+        ctx.strokeStyle = `rgba(142, 207, 255, ${alpha})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(marker.x, marker.y, 4 + progress * 14, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
 
     // Fading trail of where the dot has actually been.
     for (let i = 0; i < trail.length; i++) {

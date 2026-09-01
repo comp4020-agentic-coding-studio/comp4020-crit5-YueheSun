@@ -238,6 +238,40 @@ same playtest:
   index always resolves to the same direction regardless of which
   walk or what the actual timestamp is.
 
+## Locked mechanic/UI invariants (round 4)
+
+Round-3's tolerance read as too tight in play (the 12px corridor / 40ms
+click slack felt like "no room to be wrong"). Widened `CORRIDOR_HALF_WIDTH`
+12→24 in `game.ts` (lag 40ms→80ms, still under the ~100ms simultaneity
+threshold round-3 established). Alongside that fix, two things got
+confirmed as deliberate design, not incidental — worth locking in here so a
+later tuning pass doesn't undo them without an explicit ask:
+
+1. **Judgment logic is purely spatial, one number.** `hasCrashed`
+   (`track.ts`) never compares click timestamps to corner timestamps — a
+   click only ever changes when the player's own line turns
+   (`walkTurns(clickTimes, …)`); death is exclusively "has that line
+   drifted sideways past `CORRIDOR_HALF_WIDTH` from the corridor's own
+   line." `CORRIDOR_HALF_WIDTH` is intentionally the single knob for both
+   the drawn corridor's width and a click's timing slack (tolerance =
+   `CORRIDOR_HALF_WIDTH / ROUTE_SPEED`) — there is no second, independent
+   timing-tolerance constant anywhere in the code, and none should be
+   reintroduced; widening/narrowing the corridor *is* widening/narrowing
+   the forgiveness, by construction, not two things to keep in sync by
+   hand.
+2. **The live viewport deliberately shows only a short stretch of
+   corridor around the dot** — no zoom-out, no extended lookahead. This
+   falls out for free from a camera fixed on the dot + constant
+   `ROUTE_SPEED` + a normal screen size (`game.ts`'s `draw()` draws the
+   *entire* route every frame, but only whatever falls inside the current
+   screen translate is ever visible) — not a separate clipping mechanism,
+   and not something to add one for. The point: a player must react to a
+   freshly-revealed turn quickly, which is what makes the self-teaching/
+   10-second-legibility requirement (see Alignment below) actually true in
+   play, not just in theory. Don't slow the world down or widen the render
+   lookahead to make more track visible at once — that trades away the
+   "quick judgment on reveal" difficulty this game is testing.
+
 ## The idea, as given
 
 Dancing-Line-style game: parse the rhythm of a music track to generate a
