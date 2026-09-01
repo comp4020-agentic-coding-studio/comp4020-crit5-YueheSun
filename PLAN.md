@@ -5,7 +5,7 @@ build plan: reasoning behind decisions, current state, and next steps for
 whoever (agent or me) picks this up next. Update it at phase boundaries, then
 `/clear` and reload with `@PLAN.md`, per `CLAUDE.md`.
 
-## Status (renderer + wall collision + designed turns all built; end-of-run screen + progress markers next)
+## Status (renderer + wall collision + designed turns + true corner fillets all built; end-of-run screen next)
 
 **Resolved as of this update.** The accent/ramp version was re-checked
 against the debug tool and the user gave three concrete complaints: turns
@@ -405,7 +405,7 @@ if so, design it so the two segments' axes are never blended directly
 (e.g. easing the scalar `lateralOffset` value on a single, always-current
 axis, not lerping two perpendicular world-space points).
 
-## Round 7: rounding the corridor's *inner* corner (in progress)
+## Round 7: rounding the corridor's *inner* corner (done)
 
 Two requests from the same playtest message: (1) "since the line now has
 width, increase the corridor/collision tolerance a bit more" — done,
@@ -458,28 +458,42 @@ doesn't have to re-derive it:
   offset boundaries instead of relying on stroke-join semantics that can
   only reach one of them.
 
-**Concrete next step:** write a `buildCorridorOutline(points, halfWidth):
-Path2D` (in `game.ts`, since it's rendering-only geometry — `track.ts`'s
-`lateralOffset`/`hasCrashed` and `route.ts`'s `walkTurns` model instantaneous
-90° turns for game logic and should stay untouched, this is purely about
-what gets drawn). Build it as one closed path: walk the "right offset"
-boundary start→end (straight `lineTo` between vertices, arc-around-`V`
-per the construction above at each interior vertex), a round end-cap
-semicircle, the "left offset" boundary end→start, a round start-cap
-semicircle, then `closePath()`. Compute it once after `route` is built
-(it's static for the whole run, unlike the old per-frame stroke rebuild),
-and replace the current `ctx.stroke()` corridor block in `draw()` with a
-single `ctx.fill(corridorOutline)`. Watch the arc sweep direction (each
-arc must sweep the *short* 90° way between its two endpoints, not the long
-270° way — work it out with `Math.atan2` + a signed-shortest-angle
-normalization, don't assume `ctx.arc`'s default direction is right without
-checking a concrete case by hand). Verify with `pnpm check`, then an
-actual look in the browser (this is a geometry/visual judgment call, not a
-pass/fail test) before committing — don't trust the derivation alone,
-per `CLAUDE.md`.
+**Implemented exactly as designed above:** `buildCorridorOutline(points,
+halfWidth): Path2D` now lives in `game.ts` (rendering-only geometry —
+`track.ts`/`route.ts` untouched). One closed `Path2D`: right-offset
+boundary start→end (straight `lineTo` between vertices, `arcBetween`
+around `V` at each interior vertex), a round end cap, the left-offset
+boundary end→start, a round start cap, `closePath()`. `arcBetween` picks
+the short 90° sweep generically via `Math.atan2` + signed-angle
+normalization (no hardcoded left/right case), confirmed correct by hand
+against a concrete `(0,-1)`-heading example before trusting it generally.
+The two end caps needed the same `anticlockwise=true` parameter, which
+isn't the mirror-image guess it looks like — also worked out by hand
+(see the code comments in `game.ts` for both derivations) rather than
+assumed. Computed once after `route` is built, replacing the old
+`ctx.stroke()` corridor block with a single `ctx.fill(corridorOutline)`.
 
-**← current checkpoint.** Update this file again once the fillet is
-implemented and confirmed, then `/clear` and reload `@PLAN.md`.
+**Verified in the browser, not just typechecked:** `pnpm check` green
+(53 tests — unchanged, this is rendering-only and touches no tested
+module), then driven live via a throwaway Playwright+Firefox script
+(headless Chromium's system deps weren't installable without root in
+this container; Firefox needed only `libasound2t64`, fetched with
+`apt-get download` and pointed at via `LD_LIBRARY_PATH` rather than
+system-installed). A zoomed screenshot of the first real turn (crashed
+there with zero clicks, which conveniently freezes the camera right on
+top of it) shows **both** the outer corner (top-left, big convex arc)
+and the inner corner (the concave joint) rounded with the same visible
+radius in a single frame — the exact fix round 5's stroke-only rounding
+couldn't reach. Confirms the geometry derivation rather than just
+trusting it.
+
+**Not re-verified per-direction:** only one concrete turn (a `true`/right
+entry in `TURN_PATTERN`) was screenshotted; a `false`/left turn wasn't
+separately confirmed live. Low risk — `arcBetween` and the two boundary
+walks apply identically regardless of `TURN_PATTERN`'s value at that
+index, with no direction-specific branch in the code — but flagging it
+here in case a future playtest ever reports an asymmetry between left-
+and right-turn corners specifically, so that's the first place to look.
 
 ## The idea, as given
 
@@ -752,11 +766,9 @@ stay as-is.
 7. Playtest cold at both marking viewports; capture the one change that
    comes out of that (not out of re-reading the code) for `PROCESS.md`.
 
-**← current checkpoint** is actually round 7 above (the corridor's inner
-corner needs a true geometric fillet, not the rejected stamped-disc
-approach) — pick that up first, since it was mid-implementation when this
-session ended. Step 6.3 (results screen) and step 7 (cold playtest) are
-next after that, both still open.
+**← current checkpoint.** Round 7 (the corridor's true geometric fillet)
+is done and confirmed live in the browser — see above. Step 6.3 (results
+screen) is next, then step 7 (cold playtest).
 
 ## Next-session work (requested, not started): gem rewards + death sound
 

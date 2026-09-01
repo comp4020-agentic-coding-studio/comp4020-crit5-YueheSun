@@ -16,7 +16,7 @@
 // (PLAN.md step 5) — that's the next step, after a human playtests this.
 
 import { loadMonoSamples, detectOnsets, markTurns } from "./rhythm";
-import { buildRouteShape } from "./route";
+import { buildRouteShape, rotate, type RoutePoint } from "./route";
 import { hasCrashed, linePosition } from "./track";
 
 const MAX_ROUTE_SECONDS = 60;
@@ -46,12 +46,109 @@ const LINE_WIDTH = 14;
 
 type TerminalState = "dead" | "finished";
 
+type Vector = { x: number; y: number };
+
+function headingBetween(a: Vector, b: Vector): Vector {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length = Math.hypot(dx, dy);
+  return length > 0 ? { x: dx / length, y: dy / length } : { x: 0, y: -1 };
+}
+
+function addScaled(p: Vector, dir: Vector, amount: number): Vector {
+  return { x: p.x + dir.x * amount, y: p.y + dir.y * amount };
+}
+
+/**
+ * Arc a Path2D from `from` to `to` around `center` (both assumed to already
+ * sit at exactly `radius` from `center`), sweeping whichever way is
+ * shorter. For every interior route vertex this is a plain 90° turn, so
+ * `delta` always comes out to exactly ±90° regardless of which way the
+ * corridor actually turns there — verified by hand against the (0,-1)
+ * heading case in PLAN.md's round-7 note before relying on it generally.
+ */
+function arcBetween(path: Path2D, center: Vector, from: Vector, to: Vector, radius: number): void {
+  const startAngle = Math.atan2(from.y - center.y, from.x - center.x);
+  const endAngle = Math.atan2(to.y - center.y, to.x - center.x);
+  let delta = endAngle - startAngle;
+  while (delta <= -Math.PI) delta += Math.PI * 2;
+  while (delta > Math.PI) delta -= Math.PI * 2;
+  path.arc(center.x, center.y, radius, startAngle, startAngle + delta, delta < 0);
+}
+
+/**
+ * The corridor as a filled offset polygon, not a stroked centerline — see
+ * PLAN.md's round-7 note for why a stroke can't do this. Both boundaries
+ * (the "right" one at +halfWidth along `rotate(heading, true)`, and the
+ * "left" one at -halfWidth along the same axis — the exact axis
+ * track.ts's hasCrashed measures against, so the drawn wall matches the
+ * real hitbox on both sides, not just the outer one a round stroke join
+ * used to cover) run past every vertex at exactly `halfWidth` from it
+ * (that's what "offset by halfWidth" means), so each corner — inner and
+ * outer alike — is filleted with a plain arc of that radius centered on
+ * the vertex itself, connecting the two boundaries' natural offset feet.
+ * No miter-intersection math anywhere, and no shape stamped on top of the
+ * centerline: this *is* the wall's own outline. Computed once after the
+ * route is built, not per frame — it's static for the whole run.
+ */
+function buildCorridorOutline(points: RoutePoint[], halfWidth: number): Path2D {
+  const path = new Path2D();
+  const n = points.length;
+  if (n < 2) return path;
+  const h = halfWidth;
+
+  const headings: Vector[] = [];
+  for (let i = 0; i < n - 1; i++) headings.push(headingBetween(points[i], points[i + 1]));
+
+  // Right boundary (+halfWidth side), start -> end, filleting each interior vertex.
+  const rightStart = addScaled(points[0], rotate(headings[0], true), h);
+  path.moveTo(rightStart.x, rightStart.y);
+  for (let i = 1; i < n - 1; i++) {
+    const footIn = addScaled(points[i], rotate(headings[i - 1], true), h);
+    const footOut = addScaled(points[i], rotate(headings[i], true), h);
+    path.lineTo(footIn.x, footIn.y);
+    arcBetween(path, points[i], footIn, footOut, h);
+  }
+  const rightEnd = addScaled(points[n - 1], rotate(headings[n - 2], true), h);
+  path.lineTo(rightEnd.x, rightEnd.y);
+
+  // End cap: a round join bulging forward, past the last vertex — the
+  // same "shortest way" logic doesn't disambiguate a semicircle (both
+  // directions are 180°), so this sweeps explicitly through the forward
+  // direction (worked out by hand against a concrete heading, see
+  // PLAN.md): anticlockwise=true from (heading+90°) to (heading-90°).
+  const endAngle = Math.atan2(headings[n - 2].y, headings[n - 2].x);
+  path.arc(points[n - 1].x, points[n - 1].y, h, endAngle + Math.PI / 2, endAngle - Math.PI / 2, true);
+
+  // Left boundary (-halfWidth side), walked end -> start.
+  for (let i = n - 2; i >= 1; i--) {
+    const footOut = addScaled(points[i], rotate(headings[i], true), -h);
+    const footIn = addScaled(points[i], rotate(headings[i - 1], true), -h);
+    path.lineTo(footOut.x, footOut.y);
+    arcBetween(path, points[i], footOut, footIn, h);
+  }
+  const leftStart = addScaled(points[0], rotate(headings[0], true), -h);
+  path.lineTo(leftStart.x, leftStart.y);
+
+  // Start cap: same construction, bulging backward instead of forward —
+  // also anticlockwise=true (verified by hand; this isn't the mirror of
+  // the end cap's parameters, both ends up needing anticlockwise=true
+  // once you actually work out which side each sweep direction passes
+  // through, see PLAN.md).
+  const startAngle = Math.atan2(headings[0].y, headings[0].x);
+  path.arc(points[0].x, points[0].y, h, startAngle - Math.PI / 2, startAngle + Math.PI / 2, true);
+
+  path.closePath();
+  return path;
+}
+
 export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Promise<void> {
   const { samples, sampleRate } = await loadMonoSamples(trackUrl);
   const trackDuration = samples.length / sampleRate;
   const onsets = detectOnsets(samples, sampleRate);
   const beats = markTurns(onsets);
   const route = buildRouteShape(beats, { maxDurationSeconds: Math.min(MAX_ROUTE_SECONDS, trackDuration) });
+  const corridorOutline = buildCorridorOutline(route.points, CORRIDOR_HALF_WIDTH);
 
   const ctx = canvas.getContext("2d")!;
   const audio = new Audio(trackUrl);
@@ -150,27 +247,14 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
 
     // Corridor: the whole known route, drawn ahead and behind — seeing the
     // path coming is the reference game's own affordance, not a shortcut.
-    ctx.strokeStyle = "#3a3f4b";
-    ctx.lineWidth = CORRIDOR_HALF_WIDTH * 2;
-    // Round, not miter: a round join's outer boundary is a literal arc of
-    // radius CORRIDOR_HALF_WIDTH around the vertex, so it matches the actual
-    // hitbox (hasCrashed's perpendicular distance) exactly at every corner —
-    // a miter overshoots the true hitbox by ~10 world units at a 90° turn
-    // (see PLAN.md), which read as "looks safe, isn't."
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    route.points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-    ctx.stroke();
-    // The *inner* (concave) side of each turn is still a sharp miter cross
-    // here — round join only rounds the outer side. A stamped disc at each
-    // vertex was tried and rejected (looks like a shape glued on top, not
-    // the wall's own geometry); the real fix is a geometry-level fillet on
-    // the corridor's actual boundary — see PLAN.md's round-7 note for the
-    // worked-out approach (build the offset boundary as a filled Path2D,
-    // rounded with an arc of radius CORRIDOR_HALF_WIDTH centered on the
-    // route's own vertex — same radius on both sides, so the visible wall
-    // never claims to be tighter or looser than hasCrashed's real hitbox).
+    // Filled offset polygon (buildCorridorOutline), not a stroked
+    // centerline — its fillets, on both the inner and outer side of every
+    // turn, are literal arcs of radius CORRIDOR_HALF_WIDTH centered on the
+    // route's own vertex, so the drawn wall matches hasCrashed's actual
+    // hitbox exactly everywhere, not just the outer side a round stroke
+    // join used to cover (see PLAN.md's round-7 note).
+    ctx.fillStyle = "#3a3f4b";
+    ctx.fill(corridorOutline);
 
     // Beat-synced pulse: every decoration is a faint dot always visible
     // (same "seeing it coming" affordance as the corridor itself), and
