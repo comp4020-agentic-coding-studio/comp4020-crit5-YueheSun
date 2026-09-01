@@ -20,7 +20,10 @@ import { hasCrashed } from "./track";
 
 const MAX_ROUTE_SECONDS = 60;
 const TRAIL_LENGTH = 240;
-const CORRIDOR_HALF_WIDTH = 20;
+// Wrong-click-to-death lag is CORRIDOR_HALF_WIDTH / ROUTE_SPEED (route.ts) —
+// 12/300 = 40ms here, under the ~100ms simultaneity threshold so a wrong
+// click reads as immediate rather than delayed.
+const CORRIDOR_HALF_WIDTH = 12;
 
 type TerminalState = "dead" | "finished";
 

@@ -176,9 +176,10 @@ This section is the corrected mechanic, now built:
   never comes causes the two paths to diverge; divergence grows at a rate
   of `ROUTE_SPEED` once the two are no longer moving in the same
   direction, so a wrong click reaches the wall in `CORRIDOR_HALF_WIDTH /
-  ROUTE_SPEED` seconds (a fraction of a second at current numbers) —
-  small, uniform, and a genuine geometric consequence rather than a
-  tuned flag.
+  ROUTE_SPEED` seconds — a genuine geometric consequence rather than a
+  tuned flag, but still a real, measurable lag between the wrong action
+  and the observed death (see round-3 below for a case where this lag
+  actually matters).
 - Rendering (`game.ts`): the dot and its trail are drawn at the line's own
   simulated position, not the corridor's centerline, and the camera
   follows that real dot — so a mistimed click is now visible on screen as
@@ -189,6 +190,25 @@ This section is the corrected mechanic, now built:
   actually gets — the earlier bug (widening the corridor visually did
   nothing to the actual hit judgment, since two different numbers were
   responsible for each) can't recur, because there's only one number now.
+
+**Round-3 playtest finding:** "the death time doesn't match the time of
+the wrong click." Diagnosed by directly computing `lateralOffset` against
+the real constants (`ROUTE_SPEED=140`, `CORRIDOR_HALF_WIDTH=20` at the
+time) rather than guessing: an early click at t=4.7 against a corner at
+t=5 killed the run at t=4.85 (150ms *after* the click); a late click at
+t=5.3 killed the run at t=5.15 — *before* the late click even happened,
+since divergence starts at the corridor's own turn instant, not at
+whenever a late click eventually arrives. Not a bug in the collision
+math (verified correct) — it's `CORRIDOR_HALF_WIDTH / ROUTE_SPEED`
+(≈143ms), inherent to modeling this as a real spatial collision at all.
+Fix was to tighten both knobs rather than just one, to shrink the ratio
+without over-narrowing the corridor on its own: `ROUTE_SPEED` 140→300,
+`CORRIDOR_HALF_WIDTH` 20→12, lag ≈143ms→40ms (under the ~100ms
+simultaneity threshold). Trade-off: `ROUTE_SPEED` also sets how many
+seconds of upcoming corridor fit in the viewport at once (the "seeing the
+path coming" affordance) — raising it shortens that lookahead — so this
+wasn't a free tuning knob, worth another look if lookahead ever feels
+too short.
 
 ## The idea, as given
 

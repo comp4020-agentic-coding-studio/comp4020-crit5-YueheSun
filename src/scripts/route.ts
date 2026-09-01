@@ -14,8 +14,14 @@
 
 import type { Beat } from "./rhythm";
 
-/** World units of forward travel per second — the only place "distance along the route" is defined. */
-export const ROUTE_SPEED = 140;
+/**
+ * World units of forward travel per second — the only place "distance
+ * along the route" is defined. Also, together with game.ts's
+ * CORRIDOR_HALF_WIDTH, sets how long a wrong click takes to physically
+ * reach the wall (halfWidth / speed) — kept high enough that a wrong
+ * click reads as an immediate death, not a delayed one.
+ */
+export const ROUTE_SPEED = 300;
 
 export interface RoutePoint {
   /** Seconds since the route started. */
