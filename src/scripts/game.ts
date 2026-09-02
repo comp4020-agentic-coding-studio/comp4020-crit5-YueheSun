@@ -68,7 +68,7 @@ const PROGRESS_FRACTIONS = [0.2, 0.4, 0.6, 0.8];
 // How far outside the corridor's own edge (CORRIDOR_HALF_WIDTH) each
 // percentage label sits, so it reads as a landmark beside the track rather
 // than something drawn on the playable surface itself.
-const PROGRESS_LABEL_MARGIN = 20;
+const PROGRESS_LABEL_MARGIN = 36;
 // Extra headroom around the traveled path's bounding box for the end-of-run
 // zoom-to-fit, so the corridor's own width (and the line's rendered width on
 // top of it) doesn't get clipped right at the frame edge.
@@ -442,15 +442,22 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     // anything drawn on the playable surface itself. Left unrotated (world
     // space here is never rotated, only translated/scaled, so upright text
     // stays upright on screen regardless of which way the corridor is
-    // heading at that point) so it reads the same at every turn.
-    // Brightens permanently once passed.
-    ctx.font = "bold 16px monospace";
+    // heading at that point) so it reads the same at every turn. Large and
+    // dark-outlined (a stroke behind the fill) so it pops against both the
+    // dark background and the corridor's own gray, at a glance rather than
+    // needing to be read closely. Brightens permanently once passed.
+    ctx.font = "bold 34px monospace";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    ctx.lineJoin = "round";
     for (const marker of progressMarkers) {
       const passed = clampedElapsed >= marker.time;
-      ctx.fillStyle = passed ? "rgba(255, 214, 92, 0.9)" : "rgba(255, 255, 255, 0.35)";
-      ctx.fillText(`${Math.round(marker.fraction * 100)}%`, marker.x, marker.y);
+      const label = `${Math.round(marker.fraction * 100)}%`;
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.65)";
+      ctx.strokeText(label, marker.x, marker.y);
+      ctx.fillStyle = passed ? "#ffd65c" : "rgba(255, 255, 255, 0.55)";
+      ctx.fillText(label, marker.x, marker.y);
     }
     ctx.textAlign = "left";
 
