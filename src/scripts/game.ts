@@ -283,18 +283,16 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     const label = addScaled(pos, lateral, CORRIDOR_HALF_WIDTH + PROGRESS_LABEL_MARGIN);
     return { time, fraction, x: label.x, y: label.y };
   });
-  // Snapped to the first turn *after* the raw halfway mark, not the raw
-  // fraction itself, and not the turn just before it either — snapping to
-  // the one before left that same following turn as the very next thing the
-  // player hit on respawn, which could be immediate if the two turns
-  // happened to sit close together. Snapping to the one after instead means
-  // that turn is already behind the player the moment they respawn, so the
-  // whole next straight stretch (to the turn after *this* one) is their
-  // reaction room. Falls back to the raw fraction if the track has no turn
-  // left after the halfway point to snap to.
+  // Snapped to the turn just before the raw halfway mark, not the raw
+  // fraction itself — landing exactly mid-segment could drop the player
+  // right before an oncoming turn with no time to get their bearings.
+  // Spawning right after a turn instead gives them that turn's whole
+  // straight stretch as reaction room before the next one. Falls back to
+  // the raw fraction if the track's first turn happens to land after the
+  // halfway point (nothing earlier to snap to).
   const rawCheckpointTime = route.duration * CHECKPOINT_FRACTION;
-  const nextTurnTime = route.turnTimes.find((t) => t > rawCheckpointTime);
-  const checkpointTime = nextTurnTime ?? rawCheckpointTime;
+  const priorTurnTime = route.turnTimes.filter((t) => t <= rawCheckpointTime).at(-1);
+  const checkpointTime = priorTurnTime ?? rawCheckpointTime;
   const checkpointMarker = (() => {
     const pos = positionAtTime(route.points, checkpointTime);
     const lateral = rotate(headingAt(route.points, checkpointTime), true);
