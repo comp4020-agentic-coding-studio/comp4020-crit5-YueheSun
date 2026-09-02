@@ -676,8 +676,16 @@ as fix 1) then chases `zoomTarget` instead of the live dot once
 `terminal` is set, using a slower `ZOOM_SMOOTHING_SECONDS = 0.6` so the
 pull-back reads as a deliberate camera move rather than another snap —
 one exponential-lerp mechanism, just given a different, fixed target and
-time constant. The trail render switches from the capped fading `trail`
-to a single solid stroke of `fullTrail` at the same instant.
+time constant. The pull-back itself applies on either `dead` or
+`finished`; the trail render is where the two diverge, per a follow-up
+ask ("no need to show the full path if they fail partway through"):
+only `terminal === "finished"` switches to a single solid stroke of
+`fullTrail`, while `"dead"` keeps drawing the same capped, fading
+`trail` it had at the moment it died (the render loop stops pushing to
+`trail` once `terminal` is set, so it just holds still rather than
+continuing to fade). A finish also gets a fixed screen-space "SUCCESS"
+title, drawn after `ctx.restore()` so it doesn't pan/zoom with the
+pulled-back view under it — a death gets the pull-back but no title.
 
 **Not built:** run stats (time survived/finished, distance covered, click
 count) on the end screen — the pull-back and full-path reveal were the
@@ -689,8 +697,10 @@ sandbox limitation as rounds 7–8 (no headless browser here), and this is
 exactly the kind of feel/timing work `CLAUDE.md` flags for a human to
 actually look at rather than trust from the diff: is the shake actually
 gone, does 0.15s follow feel laggy, do the percentage labels read
-clearly (size/contrast) at both marking viewports, and does the 0.6s
-pull-back land somewhere that actually shows the whole run.
+clearly (size/contrast) at both marking viewports, does the 0.6s
+pull-back land somewhere that actually shows the whole run, and does
+the death case (pull-back, capped trail held still, no title) read as
+clearly distinct from the success case (full-path reveal + "SUCCESS").
 
 ## The idea, as given
 
