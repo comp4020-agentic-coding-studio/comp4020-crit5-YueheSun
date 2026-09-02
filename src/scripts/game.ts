@@ -548,19 +548,6 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
       ctx.textBaseline = "alphabetic";
     }
 
-    // Playback-time readout for pinpointing exactly where a bad death
-    // happens — dev-only, stripped from the production build (see
-    // main.ts's DEV gating for the same pattern).
-    if (import.meta.env.DEV) {
-      const label = `t=${elapsed.toFixed(2)}s  audio=${audio.currentTime.toFixed(2)}s`;
-      ctx.font = "14px monospace";
-      const textWidth = ctx.measureText(label).width;
-      ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-      ctx.fillRect(8, 8, textWidth + 16, 24);
-      ctx.fillStyle = "#0f0";
-      ctx.textBaseline = "middle";
-      ctx.fillText(label, 16, 20);
-    }
 
     requestAnimationFrame(loop);
   }
