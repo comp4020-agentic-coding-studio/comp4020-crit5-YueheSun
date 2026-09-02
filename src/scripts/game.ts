@@ -487,12 +487,16 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     // The player's line, drawn with actual width (not a chain of dots) —
     // gives the line some visual give at a turn instead of reading as a
     // bare point relocating. Live gameplay draws the capped, fading `trail`
-    // as before; once terminal, draw the *entire* traveled path instead
-    // (fullTrail, snapshotted in enterTerminal) as one solid stroke — that's
-    // the "whole path traveled" the end-of-run pull-back is framing.
+    // as before; on a successful finish, switch to the *entire* traveled
+    // path instead (fullTrail, snapshotted in enterTerminal) as one solid
+    // stroke — that's the "whole path traveled" the end-of-run pull-back is
+    // framing. A death doesn't get that reveal (nothing to show off), so it
+    // keeps drawing the same capped `trail` it was using at the moment it
+    // died — the loop stops pushing to it once terminal is set, so it just
+    // holds still instead of continuing to fade.
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    if (terminal === null) {
+    if (terminal !== "finished") {
       for (let i = 1; i < trail.length; i++) {
         const alpha = (i + 1) / trail.length;
         ctx.strokeStyle = `rgba(255, 214, 92, ${alpha * 0.8})`;
@@ -521,6 +525,20 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     ctx.fill();
 
     ctx.restore();
+
+    // Success title, screen-space (drawn after ctx.restore(), so it's fixed
+    // to the top of the viewport rather than panning/zooming with the
+    // pulled-back camera below it) — a death gets the pull-back too, per
+    // round 9, but no title: there's nothing to announce.
+    if (terminal === "finished") {
+      ctx.font = "bold 48px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillStyle = "#ffd65c";
+      ctx.fillText("SUCCESS", width / 2, 32);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+    }
 
     // Playback-time readout for pinpointing exactly where a bad death
     // happens — dev-only, stripped from the production build (see
