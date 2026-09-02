@@ -65,6 +65,10 @@ const ZOOM_SMOOTHING_SECONDS = 0.6;
 // perpendicular band across its full width) instead of a screen-space HUD
 // bar — the corridor itself is where the player is already looking.
 const PROGRESS_FRACTIONS = [0.2, 0.4, 0.6, 0.8];
+// How far outside the corridor's own edge (CORRIDOR_HALF_WIDTH) each
+// percentage label sits, so it reads as a landmark beside the track rather
+// than something drawn on the playable surface itself.
+const PROGRESS_LABEL_MARGIN = 20;
 // Extra headroom around the traveled path's bounding box for the end-of-run
 // zoom-to-fit, so the corridor's own width (and the line's rendered width on
 // top of it) doesn't get clipped right at the frame edge.
@@ -265,8 +269,13 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
   const progressMarkers = PROGRESS_FRACTIONS.map((fraction) => {
     const time = route.duration * fraction;
     const pos = positionAtTime(route.points, time);
+    // Always offset to the same fixed side (rotate(..., true)) rather than
+    // "whichever side has more room" — simple and deterministic, matching
+    // how the corridor's own +halfWidth boundary is chosen in
+    // buildCorridorOutline.
     const lateral = rotate(headingAt(route.points, time), true);
-    return { time, x: pos.x, y: pos.y, lateral };
+    const label = addScaled(pos, lateral, CORRIDOR_HALF_WIDTH + PROGRESS_LABEL_MARGIN);
+    return { time, fraction, x: label.x, y: label.y };
   });
 
   const ctx = canvas.getContext("2d")!;
@@ -428,22 +437,22 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     ctx.fillStyle = "#3a3f4b";
     ctx.fill(corridorOutline);
 
-    // Progress markers: a bright band across the corridor's full width at
-    // 20/40/60/80% of the route, stamped directly on the wall geometry the
-    // player is already looking at, rather than a separate screen-space
-    // readout competing for attention. Brightens permanently once passed.
+    // Progress markers: a plain percentage label beside the corridor at
+    // 20/40/60/80% of the route — a landmark next to the track, not
+    // anything drawn on the playable surface itself. Left unrotated (world
+    // space here is never rotated, only translated/scaled, so upright text
+    // stays upright on screen regardless of which way the corridor is
+    // heading at that point) so it reads the same at every turn.
+    // Brightens permanently once passed.
+    ctx.font = "bold 16px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
     for (const marker of progressMarkers) {
       const passed = clampedElapsed >= marker.time;
-      const from = addScaled(marker, marker.lateral, -CORRIDOR_HALF_WIDTH);
-      const to = addScaled(marker, marker.lateral, CORRIDOR_HALF_WIDTH);
-      ctx.strokeStyle = passed ? "rgba(255, 214, 92, 0.9)" : "rgba(255, 255, 255, 0.35)";
-      ctx.lineWidth = 4;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.stroke();
+      ctx.fillStyle = passed ? "rgba(255, 214, 92, 0.9)" : "rgba(255, 255, 255, 0.35)";
+      ctx.fillText(`${Math.round(marker.fraction * 100)}%`, marker.x, marker.y);
     }
+    ctx.textAlign = "left";
 
     // Beat-synced pulse: every decoration is a faint dot always visible
     // (same "seeing it coming" affordance as the corridor itself), and
