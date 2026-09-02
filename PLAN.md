@@ -659,33 +659,40 @@ they zoom with everything else during the round-9-3 pull-back below,
 and scroll into view exactly like the rest of the corridor (no separate
 reveal logic).
 
-**3. End-of-run camera pull-back** (the last open piece of "The idea, as
-given" / Scope item 4 / step 6.3, deferred since round 4). On either
-`"dead"` or `"finished"` — a loss counts as "the end" too, matching the
+**3. End-of-run camera pull-back — finish only** (the last open piece of
+"The idea, as given" / Scope item 4 / step 6.3, deferred since round 4).
+First built to apply on either `"dead"` or `"finished"`, matching the
 idea's original "camera pulls back to a top-down view of the whole path
-traveled," which was never scoped to a win only — `checkState`'s new
-`enterTerminal` snapshots two things once: `fullTrail` (the *entire*
-traveled path from t=0 to the final instant, resampled fresh via
-`linePosition` at a fixed 1/60s step — not the existing live `trail`,
-which is capped to a few seconds for the fading-tail look and was never
-meant to hold a whole run) and `zoomTarget` (a `fitCamera` bounding-box
-fit of `fullTrail`, padded by `CORRIDOR_HALF_WIDTH * 3` so the corridor's
-own width doesn't clip at the screen edge, capped at 1x so a very short
-run never zooms *in*). `draw()`'s per-frame camera lerp (same mechanism
-as fix 1) then chases `zoomTarget` instead of the live dot once
-`terminal` is set, using a slower `ZOOM_SMOOTHING_SECONDS = 0.6` so the
-pull-back reads as a deliberate camera move rather than another snap —
-one exponential-lerp mechanism, just given a different, fixed target and
-time constant. The pull-back itself applies on either `dead` or
-`finished`; the trail render is where the two diverge, per a follow-up
-ask ("no need to show the full path if they fail partway through"):
-only `terminal === "finished"` switches to a single solid stroke of
-`fullTrail`, while `"dead"` keeps drawing the same capped, fading
-`trail` it had at the moment it died (the render loop stops pushing to
-`trail` once `terminal` is set, so it just holds still rather than
-continuing to fade). A finish also gets a fixed screen-space "SUCCESS"
-title, drawn after `ctx.restore()` so it doesn't pan/zoom with the
-pulled-back view under it — a death gets the pull-back but no title.
+traveled" reading it as covering a loss too — the user then corrected
+that: a death should just freeze in place (dot turns red, screen stops)
+like it did before this round, no pull-back, no full-path reveal, no
+title. Current shape: on a finish, `checkState`'s `enterTerminal`
+snapshots two things once: `fullTrail` (the *entire* traveled path from
+t=0 to the final instant, resampled fresh via `linePosition` at a fixed
+1/60s step — not the existing live `trail`, which is capped to a few
+seconds for the fading-tail look and was never meant to hold a whole
+run) and `zoomTarget` (a `fitCamera` bounding-box fit of `fullTrail`,
+padded by `CORRIDOR_HALF_WIDTH * 3` so the corridor's own width doesn't
+clip at the screen edge, capped at 1x so a very short run never zooms
+*in*). `draw()`'s per-frame camera lerp (same mechanism as fix 1) then
+chases `zoomTarget` instead of the live dot, using a slower
+`ZOOM_SMOOTHING_SECONDS = 0.6` so the pull-back reads as a deliberate
+camera move rather than another snap. On a death, none of this runs —
+`enterTerminal` skips the snapshot entirely, and `draw()`'s camera
+target falls back to the dot at 1x with the normal
+`CAMERA_SMOOTHING_SECONDS`, same as live gameplay; since `elapsed` stops
+advancing once `terminal` is set, the dot's position goes static and the
+camera simply stops moving where it already was, rather than tweening
+anywhere. Trail render and the "SUCCESS" title follow the same
+finish-only split: only `terminal === "finished"` switches to a single
+solid stroke of `fullTrail` and shows the fixed screen-space title
+(drawn after `ctx.restore()`, so it doesn't pan/zoom with anything under
+it); `"dead"` keeps drawing the same capped, fading `trail` it had at
+the moment it died (the render loop stops pushing to `trail` once
+`terminal` is set, so it just holds still) and shows no title. Clicking
+after either terminal state restarts the run (`onInput` calls `reset()`
+whenever `terminal` is set) — that was already wired up before this
+round, not something added for this correction.
 
 **Not built:** run stats (time survived/finished, distance covered, click
 count) on the end screen — the pull-back and full-path reveal were the
@@ -698,9 +705,9 @@ exactly the kind of feel/timing work `CLAUDE.md` flags for a human to
 actually look at rather than trust from the diff: is the shake actually
 gone, does 0.15s follow feel laggy, do the percentage labels read
 clearly (size/contrast) at both marking viewports, does the 0.6s
-pull-back land somewhere that actually shows the whole run, and does
-the death case (pull-back, capped trail held still, no title) read as
-clearly distinct from the success case (full-path reveal + "SUCCESS").
+pull-back on a finish land somewhere that actually shows the whole run,
+does a death actually freeze in place with no camera movement at all,
+and does clicking after either outcome cleanly restart the run.
 
 ## The idea, as given
 
