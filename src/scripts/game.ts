@@ -17,7 +17,7 @@
 // (PLAN.md step 5) — that's the next step, after a human playtests this.
 
 import { loadMonoSamples, detectOnsets, markTurns } from "./rhythm";
-import { buildRouteShape, rotate, type RoutePoint } from "./route";
+import { buildRouteShape, rotate, positionAtTime, headingAt, type RoutePoint } from "./route";
 import { hasCrashed, linePosition } from "./track";
 
 const MAX_ROUTE_SECONDS = 60;
@@ -58,6 +58,17 @@ const LINE_WIDTH = 14;
 // lateral axes into the *judged* position itself; this only blends where the
 // viewport is centered).
 const CAMERA_SMOOTHING_SECONDS = 0.15;
+// Same follow filter, but slower — used only once terminal is set, so the
+// end-of-run pull-back reads as a deliberate camera move, not a snap.
+const ZOOM_SMOOTHING_SECONDS = 0.6;
+// The four discrete checkpoints stamped directly on the corridor (a
+// perpendicular band across its full width) instead of a screen-space HUD
+// bar — the corridor itself is where the player is already looking.
+const PROGRESS_FRACTIONS = [0.2, 0.4, 0.6, 0.8];
+// Extra headroom around the traveled path's bounding box for the end-of-run
+// zoom-to-fit, so the corridor's own width (and the line's rendered width on
+// top of it) doesn't get clipped right at the frame edge.
+const ZOOM_PADDING = CORRIDOR_HALF_WIDTH * 3;
 
 type TerminalState = "dead" | "finished";
 
@@ -206,6 +217,42 @@ function buildCorridorOutline(points: RoutePoint[], halfWidth: number): Path2D {
   return path;
 }
 
+/**
+ * The entire path the player's line actually traveled, from the run's start
+ * to `duration` (the moment it ended) — unlike the live `trail` in
+ * `startGame`, which is capped to the last few seconds for the fading-tail
+ * look, this samples the whole run for the end-of-run pull-back. Resamples
+ * `linePosition` at a fixed step rather than recording every live frame, so
+ * it's exact regardless of the run's actual framerate.
+ */
+function sampleFullTrail(cornerTimes: number[], clickTimes: number[], duration: number): Vector[] {
+  const step = 1 / 60;
+  const points: Vector[] = [];
+  for (let t = 0; t < duration; t += step) points.push(linePosition(cornerTimes, clickTimes, t));
+  points.push(linePosition(cornerTimes, clickTimes, duration));
+  return points;
+}
+
+/** The camera position + scale that fits every one of `points` on screen,
+ * with `padding` world units of headroom on every side — never zoomed in
+ * past 1x, only ever out. */
+function fitCamera(points: Vector[], width: number, height: number, padding: number): { x: number; y: number; scale: number } {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const spanX = Math.max(maxX - minX, 1) + padding * 2;
+  const spanY = Math.max(maxY - minY, 1) + padding * 2;
+  const scale = Math.min(width / spanX, height / spanY, 1);
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2, scale };
+}
+
 export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Promise<void> {
   const { samples, sampleRate } = await loadMonoSamples(trackUrl);
   const trackDuration = samples.length / sampleRate;
@@ -213,6 +260,14 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
   const beats = markTurns(onsets);
   const route = buildRouteShape(beats, { maxDurationSeconds: Math.min(MAX_ROUTE_SECONDS, trackDuration) });
   const corridorOutline = buildCorridorOutline(route.points, CORRIDOR_HALF_WIDTH);
+  // Progress markers: computed once, like the corridor itself — a fixed
+  // property of the route, not something that changes frame to frame.
+  const progressMarkers = PROGRESS_FRACTIONS.map((fraction) => {
+    const time = route.duration * fraction;
+    const pos = positionAtTime(route.points, time);
+    const lateral = rotate(headingAt(route.points, time), true);
+    return { time, x: pos.x, y: pos.y, lateral };
+  });
 
   const ctx = canvas.getContext("2d")!;
   const audio = new Audio(trackUrl);
@@ -231,6 +286,14 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
   let cameraX = Number.NaN;
   let cameraY = Number.NaN;
   let lastFrameMs = performance.now();
+  // Set only once terminal is reached (see enterTerminal below): camScale
+  // starts at 1 (live gameplay is never zoomed) and only the end-of-run
+  // pull-back ever changes it. fullTrail is the *entire* traveled path, for
+  // the end screen — distinct from the capped, fading `trail` above, which
+  // is a live-only visual and not what the pull-back should frame.
+  let camScale = 1;
+  let zoomTarget: { x: number; y: number; scale: number } | null = null;
+  let fullTrail: Vector[] = [];
 
   function attemptAudioPlay() {
     audioPlaying = false;
@@ -250,6 +313,9 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     trail = [];
     cameraX = Number.NaN;
     cameraY = Number.NaN;
+    camScale = 1;
+    zoomTarget = null;
+    fullTrail = [];
     audio.pause();
     audio.currentTime = 0;
     attemptAudioPlay();
@@ -284,15 +350,26 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     }
   });
 
+  // Run once, the instant the run ends either way (per PLAN.md's original
+  // "camera pulls back to a top-down view of the whole path traveled" —
+  // that was always meant to cover a loss as much as a finish, showing how
+  // far the run actually got). Snapshots the traveled path and the camera
+  // framing that fits it; draw()'s per-frame tween does the rest.
+  function enterTerminal(state: TerminalState) {
+    terminal = state;
+    audio.pause();
+    const finalTime = Math.min(elapsed, route.duration);
+    fullTrail = sampleFullTrail(route.turnTimes, clickTimes, finalTime);
+    zoomTarget = fitCamera(fullTrail, window.innerWidth, window.innerHeight, ZOOM_PADDING);
+  }
+
   function checkState() {
     if (hasCrashed(route.turnTimes, clickTimes, elapsed, CORRIDOR_HALF_WIDTH)) {
-      terminal = "dead";
-      audio.pause();
+      enterTerminal("dead");
       return;
     }
     if (elapsed >= route.duration) {
-      terminal = "finished";
-      audio.pause();
+      enterTerminal("finished");
     }
   }
 
@@ -314,20 +391,32 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     const now = performance.now();
     const dt = Math.min((now - lastFrameMs) / 1000, 0.1);
     lastFrameMs = now;
+    // Live gameplay follows the dot at 1x, same as before. Once terminal,
+    // the target switches to the fitted end-of-run framing instead, and the
+    // follow filter switches to the slower ZOOM_SMOOTHING_SECONDS — the same
+    // exponential-lerp mechanism, just chasing a different, fixed point.
+    const desiredScale = terminal === null || !zoomTarget ? 1 : zoomTarget.scale;
+    const desiredX = terminal === null || !zoomTarget ? dot.x : zoomTarget.x;
+    const desiredY = terminal === null || !zoomTarget ? dot.y : zoomTarget.y;
+    const smoothingSeconds = terminal === null ? CAMERA_SMOOTHING_SECONDS : ZOOM_SMOOTHING_SECONDS;
     if (Number.isNaN(cameraX) || Number.isNaN(cameraY)) {
-      cameraX = dot.x;
-      cameraY = dot.y;
+      cameraX = desiredX;
+      cameraY = desiredY;
+      camScale = desiredScale;
     } else {
-      const follow = 1 - Math.exp(-dt / CAMERA_SMOOTHING_SECONDS);
-      cameraX += (dot.x - cameraX) * follow;
-      cameraY += (dot.y - cameraY) * follow;
+      const follow = 1 - Math.exp(-dt / smoothingSeconds);
+      cameraX += (desiredX - cameraX) * follow;
+      cameraY += (desiredY - cameraY) * follow;
+      camScale += (desiredScale - camScale) * follow;
     }
 
     ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, width, height);
 
     ctx.save();
-    ctx.translate(width / 2 - cameraX, height / 2 - cameraY);
+    ctx.translate(width / 2, height / 2);
+    ctx.scale(camScale, camScale);
+    ctx.translate(-cameraX, -cameraY);
 
     // Corridor: the whole known route, drawn ahead and behind — seeing the
     // path coming is the reference game's own affordance, not a shortcut.
@@ -338,6 +427,23 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     // own comments for why this is cosmetic, not a hitbox claim).
     ctx.fillStyle = "#3a3f4b";
     ctx.fill(corridorOutline);
+
+    // Progress markers: a bright band across the corridor's full width at
+    // 20/40/60/80% of the route, stamped directly on the wall geometry the
+    // player is already looking at, rather than a separate screen-space
+    // readout competing for attention. Brightens permanently once passed.
+    for (const marker of progressMarkers) {
+      const passed = clampedElapsed >= marker.time;
+      const from = addScaled(marker, marker.lateral, -CORRIDOR_HALF_WIDTH);
+      const to = addScaled(marker, marker.lateral, CORRIDOR_HALF_WIDTH);
+      ctx.strokeStyle = passed ? "rgba(255, 214, 92, 0.9)" : "rgba(255, 255, 255, 0.35)";
+      ctx.lineWidth = 4;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+    }
 
     // Beat-synced pulse: every decoration is a faint dot always visible
     // (same "seeing it coming" affordance as the corridor itself), and
@@ -364,16 +470,31 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
 
     // The player's line, drawn with actual width (not a chain of dots) —
     // gives the line some visual give at a turn instead of reading as a
-    // bare point relocating.
+    // bare point relocating. Live gameplay draws the capped, fading `trail`
+    // as before; once terminal, draw the *entire* traveled path instead
+    // (fullTrail, snapshotted in enterTerminal) as one solid stroke — that's
+    // the "whole path traveled" the end-of-run pull-back is framing.
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    for (let i = 1; i < trail.length; i++) {
-      const alpha = (i + 1) / trail.length;
-      ctx.strokeStyle = `rgba(255, 214, 92, ${alpha * 0.8})`;
+    if (terminal === null) {
+      for (let i = 1; i < trail.length; i++) {
+        const alpha = (i + 1) / trail.length;
+        ctx.strokeStyle = `rgba(255, 214, 92, ${alpha * 0.8})`;
+        ctx.lineWidth = LINE_WIDTH;
+        ctx.beginPath();
+        ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
+        ctx.lineTo(trail[i].x, trail[i].y);
+        ctx.stroke();
+      }
+    } else {
+      ctx.strokeStyle = "rgba(255, 214, 92, 0.85)";
       ctx.lineWidth = LINE_WIDTH;
       ctx.beginPath();
-      ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
-      ctx.lineTo(trail[i].x, trail[i].y);
+      for (let i = 0; i < fullTrail.length; i++) {
+        const p = fullTrail[i];
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      }
       ctx.stroke();
     }
 
@@ -384,28 +505,6 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     ctx.fill();
 
     ctx.restore();
-
-    // Progress readout (PLAN.md step 6.2) — a thin bar + percentage fixed to
-    // the top of the screen, in screen space (drawn after ctx.restore(), so
-    // it doesn't pan/zoom with the world like the corridor does). Lets a
-    // player tell how far through the run they are without it competing for
-    // attention with the corridor itself.
-    const progress = route.duration > 0 ? clampedElapsed / route.duration : 0;
-    const barMargin = 24;
-    const barWidth = width - barMargin * 2;
-    const barHeight = 4;
-    const barY = 20;
-    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
-    ctx.fillRect(barMargin, barY, barWidth, barHeight);
-    ctx.fillStyle = "#ffd65c";
-    ctx.fillRect(barMargin, barY, barWidth * progress, barHeight);
-    const percentLabel = `${Math.round(progress * 100)}%`;
-    ctx.font = "13px monospace";
-    ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
-    ctx.textBaseline = "top";
-    ctx.textAlign = "right";
-    ctx.fillText(percentLabel, barMargin + barWidth, barY + barHeight + 6);
-    ctx.textAlign = "left";
 
     // Playback-time readout for pinpointing exactly where a bad death
     // happens — dev-only, stripped from the production build (see
