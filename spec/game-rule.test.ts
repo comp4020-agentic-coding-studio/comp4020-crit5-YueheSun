@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { hasCrashed, lateralOffset } from "../src/scripts/track";
+import { hasCrashed } from "../src/scripts/track";
 
 // The C5 spec's required "one rule under a focused automated test": has the
-// player's line drifted sideways into the corridor wall? This is the whole
+// player's line physically touched the corridor wall? This is the whole
 // game — miss a turn and the line drifts off the corridor and crashes, so a
 // wrong move being possible (the spec's "losable" requirement) and this
 // rule are the same fact, tested directly.
@@ -14,11 +14,10 @@ const SPEED = 10;
 const HALF_WIDTH = 2;
 const WINDOW = HALF_WIDTH / SPEED; // 0.2s
 
-describe("lateralOffset / hasCrashed", () => {
+describe("hasCrashed", () => {
   it("stays on the centerline (never crashes) when every click matches its corner exactly", () => {
     const corners = [1, 2.5, 4];
     for (const t of [0, 1, 2, 2.5, 4, 6]) {
-      expect(lateralOffset(corners, corners, t, SPEED)).toBeCloseTo(0);
       expect(hasCrashed(corners, corners, t, HALF_WIDTH, SPEED)).toBe(false);
     }
   });
@@ -81,5 +80,19 @@ describe("lateralOffset / hasCrashed", () => {
     const corners = [5, 6];
     const clicks = [5 - 0.9 * WINDOW, 6 + 0.3 * WINDOW];
     expect(hasCrashed(corners, clicks, 6.5, HALF_WIDTH, SPEED)).toBe(false);
+  });
+
+  it("doesn't crash a point that's still close to the actual (rounded) wall near a vertex", () => {
+    // The bug this test guards against: a single-axis check that's blind to
+    // the *other* segment meeting at a vertex reports a crash the instant a
+    // recentered point is far from the old segment's line, even when it's
+    // only just turned onto the new heading and is still well inside the
+    // corridor near the vertex. Same shape as the game's real corners, just
+    // at spec scale: a click 0.15s early (more than the 0.2s window would
+    // allow measured against the old segment alone) should NOT immediately
+    // crash if it's already close to the new segment's line.
+    const corners = [5];
+    const clicks = [5 - 0.15];
+    expect(hasCrashed(corners, clicks, 5 - 0.15 + 0.03, HALF_WIDTH, SPEED)).toBe(false);
   });
 });

@@ -110,39 +110,35 @@ Built and green (`pnpm check`: typecheck, build, 41 tests across 4 files):
   harness (a new function + its own tests + the debug tool now showing the
   distinction), not in a retry of the old approach.
 
-- **`src/scripts/track.ts`** — the one core rule. **Rewritten after a
-  playtest correction** (see "Mechanic: real wall collision" below for the
-  full explanation) — the first version (`resolveCorner`/`runRoute`)
-  compared click *timestamps* to corner *timestamps* within a fixed
-  tolerance window, with the player's dot always rendered on the ideal
-  precomputed corridor regardless of how accurate the clicks were. That
-  matched none of "off the corridor = death" as originally scoped below —
-  a playtest showed clicks landing wrong with nothing visibly going wrong,
-  and separately caused a premature-death bug (judging a corner "missed"
-  the instant its nominal time passed, before a legitimately-late click's
-  own grace window had closed). The rule is now genuinely spatial:
-  `lateralOffset(cornerTimes, clickTimes, time, speed)` walks both the
-  ideal corridor and the player's own click-driven path forward (via
-  `route.ts`'s `walkTurns`, fed corner times and click times
-  respectively) and returns how far sideways the two have diverged at
-  `time`; `hasCrashed(..., halfWidth)` is `|lateralOffset| > halfWidth`.
-  Since both walks move at the same constant speed regardless of heading,
-  "sideways drift at the same elapsed time" is well-defined without full
-  polygon collision. `CORNER_TOLERANCE_SECONDS` is gone as a concept —
-  `CORRIDOR_HALF_WIDTH` (in `game.ts`) is now the *only* difficulty/visual
-  knob, since crossing it is what a wall hit literally means.
+- **`src/scripts/track.ts`** — the one core rule. Originally rewritten
+  after a playtest correction (the first version, `resolveCorner`/
+  `runRoute`, compared click *timestamps* to corner *timestamps* within a
+  fixed tolerance window, with the dot always rendered on the ideal
+  precomputed corridor regardless of how accurate clicks were — matched
+  none of "off the corridor = death" as scoped below). Made genuinely
+  spatial via `lateralOffset`/`hasCrashed`, then **rewritten again in round
+  8** (see that section below) to test real geometric distance to the
+  corridor's actual wall polyline instead of a single projected axis —
+  `lateralOffset` is gone; `hasCrashed(cornerTimes, clickTimes, time,
+  halfWidth, speed)` and `linePosition(cornerTimes, clickTimes, time,
+  speed)` are the current exports, both built on the same recentered 2D
+  position. `CORRIDOR_HALF_WIDTH` (in `game.ts`) remains the *only*
+  difficulty/visual knob, since crossing it is what a wall hit literally
+  means.
 - **`spec/game-rule.test.ts`** — the spec's required "one rule under a
-  focused automated test," importing `hasCrashed`/`lateralOffset`
-  directly. Cases: perfect clicks never crash; an early or late click
-  within the divergence window (`halfWidth / speed`) survives; a click
-  further off than that crashes before the corner even arrives (the
-  "immediate failure on a mistimed click" behaviour); a missed click
-  drifts into a crash shortly after the corridor's own turn; a stray click
-  on a straight stretch crashes; an explicit "a wrong move is always
-  possible" case that drops exactly one click out of a 5-corner route and
-  asserts every one of them eventually crashes — this is the test that
-  backs the spec's "losable" requirement, not just a unit test of
-  convenience.
+  focused automated test," importing `hasCrashed` directly (the
+  now-removed `lateralOffset` was dropped from this file in round 8).
+  Cases: perfect clicks never crash; an early or late click within the
+  divergence window (`halfWidth / speed`) survives; a click further off
+  than that crashes before the corner even arrives (the "immediate failure
+  on a mistimed click" behaviour); a missed click drifts into a crash
+  shortly after the corridor's own turn; a stray click on a straight
+  stretch crashes; an explicit "a wrong move is always possible" case that
+  drops exactly one click out of a 5-corner route and asserts every one of
+  them eventually crashes; and (round 8) a case reproducing the
+  reported false-positive shape directly — a point still close to the
+  *upcoming* wall right after an early click must not crash just because
+  it's far from the *old* wall's line.
 
 **Not yet built:** the end-of-run zoom-out/results screen, the beat-synced
 pulse rendering, and the 20/40/60/80% progress markers. That's step 6
@@ -253,12 +249,16 @@ threshold round-3 established). Alongside that fix, two things got
 confirmed as deliberate design, not incidental — worth locking in here so a
 later tuning pass doesn't undo them without an explicit ask:
 
-1. **Judgment logic is purely spatial, one number.** `hasCrashed`
-   (`track.ts`) never compares click timestamps to corner timestamps — a
-   click only ever changes when the player's own line turns
-   (`walkTurns(clickTimes, …)`); death is exclusively "has that line
-   drifted sideways past `CORRIDOR_HALF_WIDTH` from the corridor's own
-   line." `CORRIDOR_HALF_WIDTH` is intentionally the single knob for both
+1. **Judgment logic is purely spatial.** `hasCrashed` (`track.ts`) never
+   compares click timestamps to corner timestamps — a click only ever
+   changes when the player's own line turns (`walkTurns(clickTimes, …)`);
+   death is exclusively "has that line's actual position drifted farther
+   than `CORRIDOR_HALF_WIDTH` from the corridor's own wall geometry."
+   (Round 8 replaced the original single-projected-axis version of this
+   check with real distance to the corridor's polyline — see that section
+   below; the *principle* that there's one spatial number and no separate
+   timing check predates and survives that rewrite unchanged.)
+   `CORRIDOR_HALF_WIDTH` is intentionally the single knob for both
    the drawn corridor's width and a click's timing slack (tolerance =
    `CORRIDOR_HALF_WIDTH / ROUTE_SPEED`) — there is no second, independent
    timing-tolerance constant anywhere in the code, and none should be
@@ -516,6 +516,98 @@ still did nothing visible. The failure mode (nonzero-winding-rule
 self-cancellation) doesn't throw or fail a type check — the only way it
 was caught was a pixel-level check of the actual rendered fill, not a
 glance at a screenshot or a read of the code.
+
+## Round 8: hasCrashed becomes real geometric distance-to-wall (supersedes the single-axis model)
+
+Bug report, with a screenshot (`image.png`): a crash registered while the
+line was visibly still inside the corridor, nowhere near a wall, near a
+rounded turn. The user's explicit ask had two parts: (1) go back to the
+simpler symmetric fillet in `game.ts` (done above, see the round-8 note in
+`filletVertex`'s comment), and (2) redesign the collision rule itself so
+"crashed" means "the line's actual position is far from the actual wall
+geometry," not an abstract offset-from-centerline number that doesn't know
+what the wall looks like.
+
+**Root cause, found empirically (a forward-scanning probe against the real
+code, not a read-through):** the old `lateralOffset` picked *one* axis —
+perpendicular to the corridor's *current* heading — and projected the
+recentered line-vs-corridor difference onto only that axis, unclamped and
+extended to infinity, reset to zero at each corner instant. Near a vertex
+this is blind to the *other* segment meeting there: a point can be safely
+inside the corridor's rounded turn (close to the *upcoming* wall) while
+still reading as "far off" the old segment's line alone, because the old
+axis has no notion of "this is close to a different wall" at all — it only
+ever measured distance to one infinite line. Concretely: for an early click
+before the corridor's own turn (so the corridor hadn't turned yet and the
+recentering baseline was still 0), the old model would flag a crash the
+moment the *old*-axis offset exceeded `CORRIDOR_HALF_WIDTH`, even when the
+true clamped distance to the *upcoming* wall segment was much smaller — the
+exact shape of the reported bug.
+
+**Fix (`src/scripts/track.ts`, fully rewritten):**
+- `recenteredPosition` keeps the round-6 per-corner "forgetting" idea (reset
+  the baseline at `segmentStart`, the corridor's most recent turn at or
+  before `time`) but now returns the **full 2D point**, not a single
+  projected scalar. `linePosition` is now a thin wrapper around this — same
+  one-source-of-truth principle round 6 established, just no longer losing
+  a dimension.
+- `hasCrashed` computes real clamped point-to-segment distance
+  (`pointToSegmentDistance`) from that point to the **nearby wall
+  segments** — not just whichever segment the corridor's own clock happens
+  to be on. `nearbySegments(points, segStart)` returns the segment starting
+  at `segStart`'s vertex, the one before it (if any), and the one after (if
+  any). The "one after" is the part that actually fixes the reported bug:
+  the whole route is known and drawn in advance, so the upcoming wall is
+  real geometry a spatially-early point can already be touching, even
+  before the corridor's own simulated clock reaches that vertex. Crash =
+  the minimum of those 2–3 segment distances exceeds `halfWidth`.
+- This makes the crash check and the drawn wall the same geometric fact for
+  the first time: "distance to the route polyline ≤ h" is exactly what a
+  round-jointed offset-polygon (game.ts's fillet) draws, on the convex side
+  of every turn. Confirmed **not fully exact on the concave (inner) side**:
+  re-derived by hand and checked numerically (see `filletVertex`'s comment
+  in `game.ts`) that the true polyline-distance boundary there is the
+  *sharp* corner round 7 originally found (min-distance to each straight
+  segment, meeting past `V`), not a circle centered on `V`. The plain
+  symmetric arc now drawn there (per this round's ask to simplify) is a
+  strictly more conservative (smaller) safe area than the real hitbox on
+  that side only — verified with a concrete point that's outside the arc's
+  radius but well within `h` of the nearer real wall. This asymmetry can
+  only make an inner-corner strip look blocked when it's technically safe,
+  never the reverse ("looks safe, still crashes") — the direction that
+  actually mattered for the reported bug — so it was left as-is rather than
+  resurrecting round 7's exact concave construction.
+- `lateralOffset` as an exported single-axis function is gone; nothing else
+  referenced it (confirmed by grep, and by `pnpm check`'s typecheck).
+
+**Verification:**
+- `spec/game-rule.test.ts` rewritten: every existing scenario's expected
+  boolean outcome preserved (hand-verified before the rewrite, confirmed by
+  the suite passing after), plus one new case reproducing the reported
+  shape directly (a point close to the *upcoming* wall right after an early
+  click, still well inside `halfWidth` of the real nearest segment). `pnpm
+  check`: 54/54 tests, clean typecheck/build.
+- Re-ran a throwaway forward-scanning probe (same pattern as the original
+  diagnosis, deleted after use) against the new `hasCrashed` at real-game
+  scale (`ROUTE_SPEED=300`, `CORRIDOR_HALF_WIDTH=28`): a 100ms-early click
+  (just past the ~93ms window) now crashes right at the true geometric
+  boundary (distance ≈28.05, i.e. the window is respected almost exactly,
+  not early); a late click crashes at ≈93.5ms after the corner (matches the
+  window); a two-close-corners scenario with an 80ms-early click at the
+  first survives with no spurious crash anywhere in a full forward scan.
+  No false positive found anywhere in these scans, unlike before the fix.
+- Not independently re-verified live in-browser in this sandbox (headless
+  Chromium/Firefox both fail to launch here — missing system shared
+  libraries, not fixed as part of this task, same limitation noted in round
+  7's Playwright work). **Ask the user to check this themselves** via the
+  running dev server, near a turn, before treating this as fully closed —
+  this repo's own "the rendered page is the truth" rule applies especially
+  here since the reported bug was itself a visual/geometric mismatch.
+- Also corrected stale comments describing the old single-axis model:
+  `game.ts`'s module header (`linePosition`'s "offset sideways" framing),
+  `route.ts`'s `TURN_PATTERN` comment (referenced the now-removed
+  `lateralOffset` by name), and the round-4 "Locked mechanic/UI invariants"
+  section below (still described `hasCrashed` as projecting onto one axis).
 
 ## The idea, as given
 
@@ -788,11 +880,13 @@ stay as-is.
 7. Playtest cold at both marking viewports; capture the one change that
    comes out of that (not out of re-reading the code) for `PROCESS.md`.
 
-**← current checkpoint.** Round 7 (the corridor's true geometric fillet,
-including the concave-side correction — see above and
-`process-notes.md`) is done, confirmed live in the browser, `pnpm check`
-green, and committed (`3363e93`). Step 6.3 (results screen) is next,
-then step 7 (cold playtest).
+**← current checkpoint.** Round 8 (real geometric wall collision,
+replacing the single-axis `hasCrashed` — see above) is done, `pnpm check`
+green (54 tests), not yet committed and **not yet confirmed live in the
+browser** — ask the user to check the dev server near a turn before
+treating this as fully closed, same sandbox limitation as round 7's
+Playwright work. Step 6.3 (results screen) is next, then step 7 (cold
+playtest).
 
 ## Next-session work (requested, not started): gem rewards + death sound
 

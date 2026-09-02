@@ -171,3 +171,50 @@ the three or four that show real judgement.
    way.
 4. **The citation** — the fix itself: `3363e93`. Contrast with the
    earlier, wrongly-confirmed attempt: `4f26683`.
+
+## "Render and judgment share one source of truth" was applied to the dot, never audited for the wall
+
+1. **What happened** — round 6 fixed the *dot's* rendering to be built on
+   the exact same computation `hasCrashed` judges against
+   (`track.ts`'s `linePosition`), and that principle got written up and
+   trusted from then on. But nobody went back and checked the *wall's*
+   side of the same equation: `game.ts`'s corridor-outline comments
+   (round 5, round 7) asserted the drawn wall "matches `hasCrashed`'s real
+   hitbox exactly," when what `hasCrashed` actually computed at the time
+   was a single rotating offset axis with no notion of distance-to-wall at
+   all — there was no vertex-shaped hitbox for a rendered fillet to match
+   in the first place. That mismatch produced exactly what the user
+   reported, with a screenshot: a crash while the line was visibly still
+   inside the corridor. The comments read as verified ("matches exactly")
+   but the claim had never actually been derived from the same math on
+   both sides — only assumed, because the *dot* half of that principle had
+   been solid since round 6.
+2. **What worked** — not re-reading the code more carefully, but running a
+   throwaway forward-scanning probe against the real, running `hasCrashed`
+   (stepping time forward and asking, at the instant it flips to true,
+   what the actual clamped distance to the nearest wall segment is). That
+   surfaced the real model in ten minutes: a single infinite-line
+   projection, reset at each corner, blind to whichever *other* segment
+   meets at a vertex. A geometric hand-derivation alone (as round 7's
+   already did, for the render side) can be internally consistent and
+   still be reasoning about the wrong function — the probe checks the
+   actual code path, not a mental model of it.
+3. **The lesson** — "the render and the judgment are one source of truth"
+   is a claim about *two* things converging, and confirming it for one
+   side (the dot) is not evidence for the other (the wall) — each needs
+   its own check. When a doc comment says two computations "match exactly"
+   or "are the same fact," that is a testable claim, not a design summary;
+   treat it as one until it's been verified the same way a bug fix would
+   be (probe the real function, don't just re-derive by hand and trust
+   it). The fix (`track.ts`'s `hasCrashed` rewritten to real
+   clamped-distance-to-polyline) makes the two sides structurally the same
+   computation now, on the convex side of every turn — and the concave
+   side's remaining, deliberate inexactness is written down precisely
+   (which direction it errs in, and why that direction is safe) rather
+   than glossed over the way the wrong "matches exactly" claim was.
+
+> "But what I actually want is for the collision detection logic itself to
+> be 'did the line physically touch the wall' — not an abstract
+> offset-from-centerline calculation that doesn't know what the wall looks
+> like. ... I don't want situations where it's visually clear the line
+> hasn't hit the wall, but the game still registers a failure."

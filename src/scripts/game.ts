@@ -7,10 +7,11 @@
 //
 // The corridor (route.points) is the fixed, beat-derived shape. The
 // player's line is drawn via track.ts's linePosition — the corridor's own
-// position at each instant, offset sideways by however far off-center the
-// player's clicks have drifted *this turn* (see track.ts for why that
-// offset resets every turn, not just at the start of a run). hasCrashed
-// checks every frame against that same offset.
+// position at each instant, plus however far off-center the player's clicks
+// have drifted *this turn* (see track.ts for why that drift resets every
+// turn, not just at the start of a run). hasCrashed checks every frame
+// whether that same drawn point has actually strayed past a wall — real
+// clamped distance to the corridor's own polyline, not an abstract axis.
 //
 // Deliberately NOT included yet: the end-of-run zoom-to-top-down tween
 // (PLAN.md step 5) — that's the next step, after a human playtests this.
@@ -76,10 +77,6 @@ function arcBetween(path: Path2D, center: Vector, from: Vector, to: Vector, radi
   path.arc(center.x, center.y, radius, startAngle, startAngle + delta, delta < 0);
 }
 
-function crossZ(a: Vector, b: Vector): number {
-  return a.x * b.y - a.y * b.x;
-}
-
 /**
  * Fillet one boundary line (`sign` = +1 for the "+lateral" offset, -1 for
  * "-lateral") at interior route vertex `V`, appending to `path` — which
@@ -87,35 +84,35 @@ function crossZ(a: Vector, b: Vector): number {
  * two feet comes first in path order (`reverse` = true when this boundary
  * is being walked end→start, as the left/-lateral loop does).
  *
- * A 90° turn puts this boundary in one of two genuinely different
- * situations, and treating them the same was round 7's actual bug (see
- * PLAN.md): on the *convex* side of the turn, the two straight offset
- * lines fall short of meeting — the true hitbox rounds that corner with
- * an arc of radius `h` centered on `V` itself, tangent to both lines at
- * their natural feet (`V + sign*h*lateral`). On the *concave* side, the
- * two lines cross **beyond** their feet, at a sharp point
- * `M = V + sign*h*(lateralIn+lateralOut)` — and that sharp point already
- * *is* the true, unrounded hitbox boundary (confirmed by hand: for a
- * concave corner, Minkowski-summing the route polyline with a radius-`h`
- * disc gives a hard corner at `M`, not a circle around `V` — the nearest
- * point on the route from that side's near quadrant is always on one of
- * the two straight segments, never `V`). Rounding it is therefore a pure
- * cosmetic choice (made at the user's request, to match the convex
- * side's look), and needs a *different* arc: centered further out from
- * `M` by another `h` along the same offset directions, tangent to both
- * lines beyond `M` rather than at `V`. Using the V-centered construction
- * for this side (what round 7 originally shipped) doesn't just look
- * wrong — the two straight segments before and after it still cross at
- * `M` regardless, so the arc traces out a small loop that the fill's
- * nonzero winding rule silently re-fills, leaving the corner exactly as
- * sharp as an un-filleted miter.
+ * Both sides just get a plain arc of radius `h` centered on `V` itself,
+ * tangent to both straight offset lines at their natural feet
+ * (`V + sign*h*lateral`). Round 7 tried to give the concave (inner) side
+ * of a turn a *different*, more generous construction on the theory that
+ * it should match track.ts's hasCrashed there — but at the time,
+ * hasCrashed had no notion of distance-to-vertex at all (it was a signed
+ * offset along the corridor's *current* heading, reset at each turn
+ * instant), so there was no vertex-shaped hitbox for a wall render to
+ * match in the first place; the more generous arc just made the wall
+ * visually promise space near an inner corner that the game would still
+ * kill you for using.
  *
- * Which side is concave flips with the turn's own direction (a
- * "+lateral" boundary is concave on a right turn, convex on a left turn,
- * and vice versa for "-lateral") — determined here from the cross
- * product of the two headings rather than threaded through as a separate
- * parameter, since turn direction is otherwise not this function's
- * concern.
+ * Round 8 rewrote hasCrashed to real clamped distance-to-polyline (see
+ * track.ts). On the *convex* (outer) side, this V-centered arc is exactly
+ * that hitbox's boundary (a round-jointed offset polygon is the Minkowski
+ * sum of the polyline with a disc of radius `h`). On the *concave* (inner)
+ * side it is NOT exact — the real boundary there is the sharp shape round
+ * 7 originally found (min-distance to each of the two straight segments,
+ * which meet at a square corner past `V`, not a circle centered on it) —
+ * this plain arc is a strictly smaller, more conservative safe area than
+ * the true hitbox on that side (verified: a point can sit outside this
+ * arc's radius yet still be well within `h` of the nearer straight wall).
+ * That asymmetry is deliberate and harmless for the bug that mattered here
+ * — it never draws a wall thinner than the real one, so it can't produce
+ * "looks safe, still crashes"; it can only make a strip near an inner
+ * corner look blocked when it's technically walkable, the opposite and far
+ * less noticeable direction of error. Kept simple/symmetric anyway per an
+ * explicit ask to drop round 7's exact-but-fiddly concave construction —
+ * see PLAN.md's round-8 note.
  */
 function filletVertex(
   path: Path2D,
@@ -130,39 +127,25 @@ function filletVertex(
   const lateralOut = rotate(headingOut, true);
   const footIn = addScaled(vertex, lateralIn, sign * h);
   const footOut = addScaled(vertex, lateralOut, sign * h);
-
-  const rightTurn = crossZ(headingIn, headingOut) > 0;
-  const concave = rightTurn === (sign === 1);
-
-  if (!concave) {
-    const first = reverse ? footOut : footIn;
-    const second = reverse ? footIn : footOut;
-    path.lineTo(first.x, first.y);
-    arcBetween(path, vertex, first, second, h);
-    return;
-  }
-
-  const miter = addScaled(footIn, lateralOut, sign * h); // V + sign*h*(lateralIn+lateralOut)
-  const tangentOnIncoming = addScaled(miter, lateralOut, sign * h); // further along footIn's line
-  const tangentOnOutgoing = addScaled(miter, lateralIn, sign * h); // further along footOut's line
-  const center = addScaled(tangentOnIncoming, lateralIn, sign * h);
-  const first = reverse ? tangentOnOutgoing : tangentOnIncoming;
-  const second = reverse ? tangentOnIncoming : tangentOnOutgoing;
+  const first = reverse ? footOut : footIn;
+  const second = reverse ? footIn : footOut;
   path.lineTo(first.x, first.y);
-  arcBetween(path, center, first, second, h);
+  arcBetween(path, vertex, first, second, h);
 }
 
 /**
  * The corridor as a filled offset polygon, not a stroked centerline — see
  * PLAN.md's round-7 note for why a stroke can't do this. Both boundaries
  * (the "right" one at +halfWidth along `rotate(heading, true)`, and the
- * "left" one at -halfWidth along the same axis — the exact axis
- * track.ts's hasCrashed measures against, so the drawn wall matches the
- * real hitbox on both sides) are filleted at every interior vertex by
- * `filletVertex` above — convex or concave, whichever that side actually
- * is at that turn. No shape stamped on top of the centerline: this *is*
- * the wall's own outline. Computed once after the route is built, not
- * per frame — it's static for the whole run.
+ * "left" one at -halfWidth along the same axis) are filleted at every
+ * interior vertex by `filletVertex` above with the same symmetric,
+ * V-centered arc. Since round 8, track.ts's hasCrashed tests real clamped
+ * distance to this same polyline, so this outline is exact against the
+ * real hitbox on the convex (outer) side of every turn, and a slightly
+ * conservative (safe-direction) approximation of it on the concave
+ * (inner) side — see `filletVertex`'s own comment for the geometry and
+ * PLAN.md's round-8 note. Computed once after the route is built, not per
+ * frame — it's static for the whole run.
  */
 function buildCorridorOutline(points: RoutePoint[], halfWidth: number): Path2D {
   const path = new Path2D();
@@ -316,10 +299,9 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     // path coming is the reference game's own affordance, not a shortcut.
     // Filled offset polygon (buildCorridorOutline), not a stroked
     // centerline — its fillets, on both the inner and outer side of every
-    // turn, are literal arcs of radius CORRIDOR_HALF_WIDTH centered on the
-    // route's own vertex, so the drawn wall matches hasCrashed's actual
-    // hitbox exactly everywhere, not just the outer side a round stroke
-    // join used to cover (see PLAN.md's round-7 note).
+    // turn, are the same plain arc of radius CORRIDOR_HALF_WIDTH centered
+    // on the route's own vertex (see buildCorridorOutline/filletVertex's
+    // own comments for why this is cosmetic, not a hitbox claim).
     ctx.fillStyle = "#3a3f4b";
     ctx.fill(corridorOutline);
 

@@ -66,11 +66,11 @@ export function rotate(heading: Vector, right: boolean): Vector {
 /**
  * A fixed repeating unit of turn directions (true = right), applied by the
  * turn's *index* in the sequence — never by its timestamp or by which walk
- * (corridor vs. player) is asking. That's required: track.ts's
- * lateralOffset calls walkTurns twice independently, once for the
- * corridor's cornerTimes and once for the player's clickTimes, and the two
- * only stay comparable if the same index always resolves to the same
- * direction. Occasional back-to-back turns in the same direction (a 180°
+ * (corridor vs. player) is asking. That's required: track.ts's rawDiff
+ * calls walkTurns twice independently, once for the corridor's cornerTimes
+ * and once for the player's clickTimes, and the two only stay comparable if
+ * the same index always resolves to the same direction. Occasional
+ * back-to-back turns in the same direction (a 180°
  * hairpin) break up what would otherwise be a uniform zigzag staircase.
  */
 const TURN_PATTERN: readonly boolean[] = [true, true, false, true, false, false, true, false];
