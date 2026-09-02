@@ -44,6 +44,20 @@ const PULSE_DURATION_SECONDS = 0.25;
 // corridor, but wide enough to read as an actual line with give, not a
 // point (PLAN.md round 6).
 const LINE_WIDTH = 14;
+// The camera's follow-smoothing time constant. track.ts's recenteredPosition
+// (see its own comment) snaps the drawn dot exactly onto the corridor
+// centerline at *every* corner, not just ones the player mistimes — round 6
+// decided that's the right thing for the dot/hitbox to do. But the camera
+// used to be bound 1:1 to that same point (`ctx.translate` below), so it
+// snapped too, at every corner in the whole route — reported as violent
+// shake while turning. Fix: the camera lerps toward the dot instead of
+// equalling it, using a plain 2D exponential filter on the camera's own
+// position only — the dot, trail, and hasCrashed all still use the exact,
+// unsmoothed point (see `draw()`), so this can't touch fairness or
+// reintroduce round 6's diagonal-axis bug (that blended two perpendicular
+// lateral axes into the *judged* position itself; this only blends where the
+// viewport is centered).
+const CAMERA_SMOOTHING_SECONDS = 0.15;
 
 type TerminalState = "dead" | "finished";
 
@@ -211,6 +225,12 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
   // Whether audio is confirmed actually playing — the browser can block the
   // initial autoplay attempt entirely, so gameplay never depends on this.
   let audioPlaying = false;
+  // Camera-follow state (see CAMERA_SMOOTHING_SECONDS above). NaN means "not
+  // yet initialized" — snap to the dot on the next draw() rather than lerping
+  // from 0,0.
+  let cameraX = Number.NaN;
+  let cameraY = Number.NaN;
+  let lastFrameMs = performance.now();
 
   function attemptAudioPlay() {
     audioPlaying = false;
@@ -228,6 +248,8 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     clickTimes = [];
     terminal = null;
     trail = [];
+    cameraX = Number.NaN;
+    cameraY = Number.NaN;
     audio.pause();
     audio.currentTime = 0;
     attemptAudioPlay();
@@ -289,11 +311,23 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     const clampedElapsed = Math.min(elapsed, route.duration);
     const dot = linePosition(route.turnTimes, clickTimes, clampedElapsed);
 
+    const now = performance.now();
+    const dt = Math.min((now - lastFrameMs) / 1000, 0.1);
+    lastFrameMs = now;
+    if (Number.isNaN(cameraX) || Number.isNaN(cameraY)) {
+      cameraX = dot.x;
+      cameraY = dot.y;
+    } else {
+      const follow = 1 - Math.exp(-dt / CAMERA_SMOOTHING_SECONDS);
+      cameraX += (dot.x - cameraX) * follow;
+      cameraY += (dot.y - cameraY) * follow;
+    }
+
     ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, width, height);
 
     ctx.save();
-    ctx.translate(width / 2 - dot.x, height / 2 - dot.y);
+    ctx.translate(width / 2 - cameraX, height / 2 - cameraY);
 
     // Corridor: the whole known route, drawn ahead and behind — seeing the
     // path coming is the reference game's own affordance, not a shortcut.
