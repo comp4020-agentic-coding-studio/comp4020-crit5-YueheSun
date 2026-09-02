@@ -5,7 +5,7 @@ build plan: reasoning behind decisions, current state, and next steps for
 whoever (agent or me) picks this up next. Update it at phase boundaries, then
 `/clear` and reload with `@PLAN.md`, per `CLAUDE.md`.
 
-## Status (renderer + wall collision + designed turns + true corner fillets all built; end-of-run screen next)
+## Status (renderer + wall collision + designed turns + true corner fillets + stable camera + on-corridor progress markers + end-of-run pull-back all built; run stats next)
 
 **Resolved as of this update.** The accent/ramp version was re-checked
 against the debug tool and the user gave three concrete complaints: turns
@@ -140,10 +140,13 @@ Built and green (`pnpm check`: typecheck, build, 41 tests across 4 files):
   *upcoming* wall right after an early click must not crash just because
   it's far from the *old* wall's line.
 
-**Not yet built:** the end-of-run zoom-out/results screen, the beat-synced
-pulse rendering, and the 20/40/60/80% progress markers. That's step 6
-below (steps 1–5, including the renderer + input loop and the trail, are
-built — see "Mechanic" below for the renderer's current shape).
+**Not yet built:** run stats (time survived/finished, distance, click
+count) on the end-of-run screen — see round 9 below, the only remaining
+piece of step 6.3's original scope. The beat-synced pulse, the
+20/40/60/80% progress markers (now on-corridor, not a HUD bar), and the
+end-of-run camera pull-back/full-path reveal are all built — see "Mechanic"
+below for the renderer's current shape and round 9 for the latest three
+changes.
 
 ## Mechanic: real wall collision (redesign, supersedes the tolerance model above)
 
@@ -609,6 +612,75 @@ exact shape of the reported bug.
   `lateralOffset` by name), and the round-4 "Locked mechanic/UI invariants"
   section below (still described `hasCrashed` as projecting onto one axis).
 
+## Round 9: camera-shake fix, on-corridor progress markers, end-of-run pull-back
+
+Three changes, all confined to `game.ts` (rendering only — `pnpm check`
+stayed at 54/54 throughout, no touched module has a test).
+
+**1. Camera-shake fix.** Bug report: "the camera/viewport shakes
+violently when turning." Traced (not guessed) to `track.ts`'s
+`recenteredPosition`: it snaps the drawn dot exactly onto the corridor
+centerline at *every* corner the corridor itself turns at, not just ones
+the player mistimes — confirmed deliberate in round 6, for the dot's own
+render/hitbox fairness. But the camera was bound 1:1 to that same point
+(`ctx.translate(width/2 - dot.x, ...)`), so it snapped too, at every
+corner in the whole route (every ~1.2s on average, per the onset density
+in Status above) — that's the "violent shake." Fix: the camera now lerps
+toward the dot with a plain exponential filter (`CAMERA_SMOOTHING_SECONDS
+= 0.15`) instead of equalling it; `cameraX`/`cameraY` are new state in
+`startGame`, reset to `NaN` (meaning "snap on next frame") on `reset()`.
+This is *not* a repeat of round 6's reverted tween: that one broke because
+it blended two **perpendicular** lateral axes into the position that also
+fed the hitbox and the dot's own render, producing a fake diagonal path.
+This lerp only ever touches where the camera is centered — the dot,
+trail, and `hasCrashed` all still use the exact, unsmoothed point, so it
+can't affect fairness or reintroduce that bug.
+
+**2. Progress markers moved onto the corridor.** User's ask: markers
+belong on the track itself, not a separate HUD bar. The old top-of-screen
+bar + percentage text (screen-space, drawn after `ctx.restore()`) is
+gone entirely. In its place, `progressMarkers` (computed once, alongside
+`corridorOutline`, from `route.points` via `positionAtTime`/`headingAt`
+at 20/40/60/80% of `route.duration`) are drawn as a bright band spanning
+the corridor's full width at each fraction — dim before the dot reaches
+them, brightening permanently once passed. World-space, so they zoom with
+everything else during the round-9-3 pull-back below, and they scroll
+into view exactly like the rest of the corridor (no separate reveal
+logic).
+
+**3. End-of-run camera pull-back** (the last open piece of "The idea, as
+given" / Scope item 4 / step 6.3, deferred since round 4). On either
+`"dead"` or `"finished"` — a loss counts as "the end" too, matching the
+idea's original "camera pulls back to a top-down view of the whole path
+traveled," which was never scoped to a win only — `checkState`'s new
+`enterTerminal` snapshots two things once: `fullTrail` (the *entire*
+traveled path from t=0 to the final instant, resampled fresh via
+`linePosition` at a fixed 1/60s step — not the existing live `trail`,
+which is capped to a few seconds for the fading-tail look and was never
+meant to hold a whole run) and `zoomTarget` (a `fitCamera` bounding-box
+fit of `fullTrail`, padded by `CORRIDOR_HALF_WIDTH * 3` so the corridor's
+own width doesn't clip at the screen edge, capped at 1x so a very short
+run never zooms *in*). `draw()`'s per-frame camera lerp (same mechanism
+as fix 1) then chases `zoomTarget` instead of the live dot once
+`terminal` is set, using a slower `ZOOM_SMOOTHING_SECONDS = 0.6` so the
+pull-back reads as a deliberate camera move rather than another snap —
+one exponential-lerp mechanism, just given a different, fixed target and
+time constant. The trail render switches from the capped fading `trail`
+to a single solid stroke of `fullTrail` at the same instant.
+
+**Not built:** run stats (time survived/finished, distance covered, click
+count) on the end screen — the pull-back and full-path reveal were the
+explicit ask this round; stats are the remaining piece of step 6.3's
+original scope, next up if wanted.
+
+**Ask the user to check this live** before treating it as closed — same
+sandbox limitation as rounds 7–8 (no headless browser here), and this is
+exactly the kind of feel/timing work `CLAUDE.md` flags for a human to
+actually look at rather than trust from the diff: is the shake actually
+gone, does 0.15s follow feel laggy, do the corridor markers read clearly
+at both marking viewports, and does the 0.6s pull-back land somewhere
+that actually shows the whole run.
+
 ## The idea, as given
 
 Dancing-Line-style game: parse the rhythm of a music track to generate a
@@ -867,26 +939,22 @@ stay as-is.
    1. ~~Render the beat-synced pulse from `route.decorations`~~ — done,
       `game.ts`'s `draw()` reads `route.decorations` (faint always-on dot
       + brightening ring as the player passes each one).
-   2. ~~Progress markers~~ — done as a top-of-screen bar + percentage
-      readout in `draw()`, not on-corridor landmarks, but same purpose
-      (a player can see how far through the run they are).
-   3. **End-of-run results/summary screen — still not built.** The
-      end-of-run zoom-out from "The idea, as given" and Scope item 4:
-      on `terminal !== null`, tween the camera out to frame the whole
-      traveled path top-down (use the existing `trail`/dot-path data,
-      already top-down so this is a pan/zoom tween, not a new rendering
-      mode — see Feasibility above), plus basic run stats (time
-      survived / finished, how far along the route, maybe click count).
+   2. ~~Progress markers~~ — **redesigned in round 9** (see below): moved
+      off the screen-space HUD bar entirely, onto four discrete bands
+      stamped across the corridor itself at 20/40/60/80%.
+   3. **End-of-run camera pull-back — done in round 9** (see below); run
+      stats (time survived/finished, distance, click count) are the one
+      piece of the original step 6.3 scope still not built.
 7. Playtest cold at both marking viewports; capture the one change that
    comes out of that (not out of re-reading the code) for `PROCESS.md`.
 
-**← current checkpoint.** Round 8 (real geometric wall collision,
-replacing the single-axis `hasCrashed` — see above) is done, `pnpm check`
-green (54 tests), not yet committed and **not yet confirmed live in the
-browser** — ask the user to check the dev server near a turn before
-treating this as fully closed, same sandbox limitation as round 7's
-Playwright work. Step 6.3 (results screen) is next, then step 7 (cold
-playtest).
+**← current checkpoint.** Round 9 (camera-shake fix, on-corridor progress
+markers, end-of-run pull-back — see below) is committed, `pnpm check`
+green (54 tests, unchanged — all three changes are rendering-only). **Not
+yet confirmed live in the browser** — same sandbox limitation as rounds
+7–8 (headless Chromium/Firefox can't launch here); ask the user to check
+the dev server before treating this as fully closed. Next: the run-stats
+half of step 6.3, then step 7 (cold playtest).
 
 ## Next-session work (requested, not started): gem rewards + death sound
 
