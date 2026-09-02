@@ -65,6 +65,12 @@ const ZOOM_SMOOTHING_SECONDS = 0.6;
 // perpendicular band across its full width) instead of a screen-space HUD
 // bar — the corridor itself is where the player is already looking.
 const PROGRESS_FRACTIONS = [0.2, 0.4, 0.6, 0.8];
+// Where a mid-run death respawns from instead of the very beginning, once
+// the player has reached this point at least once. Separate from
+// PROGRESS_FRACTIONS above — this one gets its own marker glyph, not a
+// percentage label, since it means something different (a save point, not
+// just "how far along").
+const CHECKPOINT_FRACTION = 0.5;
 // How far outside the corridor's own edge (CORRIDOR_HALF_WIDTH) each
 // percentage label sits, so it reads as a landmark beside the track rather
 // than something drawn on the playable surface itself.
@@ -277,6 +283,22 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     const label = addScaled(pos, lateral, CORRIDOR_HALF_WIDTH + PROGRESS_LABEL_MARGIN);
     return { time, fraction, x: label.x, y: label.y };
   });
+  // Snapped to the turn just before the raw halfway mark, not the raw
+  // fraction itself — landing exactly mid-segment could drop the player
+  // right before an oncoming turn with no time to get their bearings.
+  // Spawning right after a turn instead gives them that turn's whole
+  // straight stretch as reaction room before the next one. Falls back to
+  // the raw fraction if the track's first turn happens to land after the
+  // halfway point (nothing earlier to snap to).
+  const rawCheckpointTime = route.duration * CHECKPOINT_FRACTION;
+  const priorTurnTime = route.turnTimes.filter((t) => t <= rawCheckpointTime).at(-1);
+  const checkpointTime = priorTurnTime ?? rawCheckpointTime;
+  const checkpointMarker = (() => {
+    const pos = positionAtTime(route.points, checkpointTime);
+    const lateral = rotate(headingAt(route.points, checkpointTime), true);
+    const label = addScaled(pos, lateral, CORRIDOR_HALF_WIDTH + PROGRESS_LABEL_MARGIN);
+    return { x: label.x, y: label.y };
+  })();
 
   const ctx = canvas.getContext("2d")!;
   const audio = new Audio(trackUrl);
@@ -303,6 +325,15 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
   let camScale = 1;
   let zoomTarget: { x: number; y: number; scale: number } | null = null;
   let fullTrail: Vector[] = [];
+  // The mid-run checkpoint (see CHECKPOINT_FRACTION): once reached, a later
+  // death respawns from checkpointClickTimes/checkpointTime instead of from
+  // scratch. checkpointClickTimes is a frozen snapshot of clickTimes at the
+  // instant the checkpoint was captured — linePosition/hasCrashed only ever
+  // read (clickTimes, time) pairs, so replaying from this snapshot at
+  // elapsed = checkpointTime reproduces the exact same on-track state the
+  // player was actually in, with no separate "checkpoint position" to track.
+  let checkpointReached = false;
+  let checkpointClickTimes: number[] = [];
 
   function attemptAudioPlay() {
     audioPlaying = false;
@@ -314,10 +345,16 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
       .catch(() => {});
   }
 
-  function reset() {
-    startTimeMs = performance.now();
-    elapsed = 0;
-    clickTimes = [];
+  // Shared by a from-scratch restart and a checkpoint respawn — both are
+  // "resume this same run at a given (time, clickTimes) pair," just with
+  // different arguments. Setting startTimeMs this way (rather than always
+  // performance.now()) is what makes elapsed, computed in loop() as
+  // (performance.now() - startTimeMs) / 1000, pick up from `time` instead of
+  // always restarting the clock at 0.
+  function restartAt(time: number, clicks: number[]) {
+    startTimeMs = performance.now() - time * 1000;
+    elapsed = time;
+    clickTimes = clicks;
     terminal = null;
     trail = [];
     cameraX = Number.NaN;
@@ -326,8 +363,16 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     zoomTarget = null;
     fullTrail = [];
     audio.pause();
-    audio.currentTime = 0;
+    audio.currentTime = time;
     attemptAudioPlay();
+  }
+
+  function reset() {
+    restartAt(0, []);
+  }
+
+  function respawnFromCheckpoint() {
+    restartAt(checkpointTime, [...checkpointClickTimes]);
   }
 
   attemptAudioPlay();
@@ -343,7 +388,8 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
 
   function onInput() {
     if (terminal) {
-      reset();
+      if (checkpointReached) respawnFromCheckpoint();
+      else reset();
       return;
     }
     catchUpAudio();
@@ -469,6 +515,30 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     }
     ctx.textAlign = "left";
 
+    // Checkpoint marker: a small flag, not a percentage label — it means
+    // something different (a save point) so it gets its own glyph rather
+    // than joining the 20/40/60/80% labels above. Dim until reached, bright
+    // and staying that way afterward, same idiom as the percentage labels'
+    // own "brightens once passed."
+    {
+      const cx = checkpointMarker.x;
+      const cy = checkpointMarker.y;
+      const color = checkpointReached ? "#5ce1ff" : "rgba(92, 225, 255, 0.4)";
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - 16);
+      ctx.lineTo(cx, cy + 16);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - 16);
+      ctx.lineTo(cx + 14, cy - 10);
+      ctx.lineTo(cx, cy - 4);
+      ctx.closePath();
+      ctx.fill();
+    }
+
     // Beat-synced pulse: every decoration is a faint dot always visible
     // (same "seeing it coming" affordance as the corridor itself), and
     // brightens into an expanding ring right as the dot reaches its time —
@@ -559,6 +629,14 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
       trail.push(linePosition(route.turnTimes, clickTimes, clampedElapsed));
       if (trail.length > TRAIL_LENGTH) trail.shift();
       checkState();
+      // Snapshotted only once the player is confirmed still alive past
+      // checkpointTime — checking after checkState() (not before) means a
+      // frame that dies right at the threshold never freezes a doomed
+      // clickTimes prefix into the checkpoint.
+      if (!terminal && !checkpointReached && elapsed >= checkpointTime) {
+        checkpointReached = true;
+        checkpointClickTimes = [...clickTimes];
+      }
     }
     draw();
   }
