@@ -359,17 +359,21 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     }
   });
 
-  // Run once, the instant the run ends either way (per PLAN.md's original
-  // "camera pulls back to a top-down view of the whole path traveled" —
-  // that was always meant to cover a loss as much as a finish, showing how
-  // far the run actually got). Snapshots the traveled path and the camera
-  // framing that fits it; draw()'s per-frame tween does the rest.
+  // Run once, the instant the run ends. A finish gets the "camera pulls
+  // back to a top-down view of the whole path traveled" reveal: snapshot
+  // the traveled path and the camera framing that fits it, and draw()'s
+  // per-frame tween does the rest. A death gets neither — per the user's
+  // correction, it should freeze exactly where it was, dot turned red, no
+  // pull-back — so it's left at the plain "line's head turns red, screen
+  // freezes" behavior from before round 9's pull-back existed.
   function enterTerminal(state: TerminalState) {
     terminal = state;
     audio.pause();
-    const finalTime = Math.min(elapsed, route.duration);
-    fullTrail = sampleFullTrail(route.turnTimes, clickTimes, finalTime);
-    zoomTarget = fitCamera(fullTrail, window.innerWidth, window.innerHeight, ZOOM_PADDING);
+    if (state === "finished") {
+      const finalTime = Math.min(elapsed, route.duration);
+      fullTrail = sampleFullTrail(route.turnTimes, clickTimes, finalTime);
+      zoomTarget = fitCamera(fullTrail, window.innerWidth, window.innerHeight, ZOOM_PADDING);
+    }
   }
 
   function checkState() {
@@ -400,14 +404,18 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
     const now = performance.now();
     const dt = Math.min((now - lastFrameMs) / 1000, 0.1);
     lastFrameMs = now;
-    // Live gameplay follows the dot at 1x, same as before. Once terminal,
-    // the target switches to the fitted end-of-run framing instead, and the
-    // follow filter switches to the slower ZOOM_SMOOTHING_SECONDS — the same
-    // exponential-lerp mechanism, just chasing a different, fixed point.
-    const desiredScale = terminal === null || !zoomTarget ? 1 : zoomTarget.scale;
-    const desiredX = terminal === null || !zoomTarget ? dot.x : zoomTarget.x;
-    const desiredY = terminal === null || !zoomTarget ? dot.y : zoomTarget.y;
-    const smoothingSeconds = terminal === null ? CAMERA_SMOOTHING_SECONDS : ZOOM_SMOOTHING_SECONDS;
+    // Live gameplay follows the dot at 1x. A finish switches the target to
+    // the fitted end-of-run framing, with the slower ZOOM_SMOOTHING_SECONDS
+    // so it reads as a deliberate pull-back — same exponential-lerp
+    // mechanism, just chasing a different, fixed point. A death gets none of
+    // that: it keeps chasing the (now frozen, since elapsed stops advancing)
+    // dot at 1x, same as live gameplay, so the camera simply stops moving
+    // where it already was rather than tweening anywhere.
+    const pullBack = terminal === "finished" ? zoomTarget : null;
+    const desiredScale = pullBack ? pullBack.scale : 1;
+    const desiredX = pullBack ? pullBack.x : dot.x;
+    const desiredY = pullBack ? pullBack.y : dot.y;
+    const smoothingSeconds = pullBack ? ZOOM_SMOOTHING_SECONDS : CAMERA_SMOOTHING_SECONDS;
     if (Number.isNaN(cameraX) || Number.isNaN(cameraY)) {
       cameraX = desiredX;
       cameraY = desiredY;
