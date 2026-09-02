@@ -371,6 +371,11 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
 
   function reset() {
     restartAt(0, []);
+    // A full restart means a genuinely new run — the old checkpoint no
+    // longer applies, so it needs to be re-earned rather than letting the
+    // very next death jump straight back to a spot from the previous run.
+    checkpointReached = false;
+    checkpointClickTimes = [];
   }
 
   function respawnFromCheckpoint() {
@@ -390,7 +395,10 @@ export async function startGame(canvas: HTMLCanvasElement, trackUrl: string): Pr
 
   function onInput() {
     if (terminal) {
-      if (checkpointReached) respawnFromCheckpoint();
+      // A finish is a completed run, not a failure to recover from — clicking
+      // past the success screen always starts a genuinely new attempt, even
+      // if a checkpoint had been reached along the way.
+      if (terminal === "dead" && checkpointReached) respawnFromCheckpoint();
       else reset();
       return;
     }
