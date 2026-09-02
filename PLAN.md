@@ -612,7 +612,7 @@ exact shape of the reported bug.
   `lateralOffset` by name), and the round-4 "Locked mechanic/UI invariants"
   section below (still described `hasCrashed` as projecting onto one axis).
 
-## Round 9: camera-shake fix, on-corridor progress markers, end-of-run pull-back
+## Round 9: camera-shake fix, progress percentage labels, end-of-run pull-back
 
 Three changes, all confined to `game.ts` (rendering only — `pnpm check`
 stayed at 54/54 throughout, no touched module has a test).
@@ -636,17 +636,28 @@ This lerp only ever touches where the camera is centered — the dot,
 trail, and `hasCrashed` all still use the exact, unsmoothed point, so it
 can't affect fairness or reintroduce that bug.
 
-**2. Progress markers moved onto the corridor.** User's ask: markers
-belong on the track itself, not a separate HUD bar. The old top-of-screen
-bar + percentage text (screen-space, drawn after `ctx.restore()`) is
-gone entirely. In its place, `progressMarkers` (computed once, alongside
-`corridorOutline`, from `route.points` via `positionAtTime`/`headingAt`
-at 20/40/60/80% of `route.duration`) are drawn as a bright band spanning
-the corridor's full width at each fraction — dim before the dot reaches
-them, brightening permanently once passed. World-space, so they zoom with
-everything else during the round-9-3 pull-back below, and they scroll
-into view exactly like the rest of the corridor (no separate reveal
-logic).
+**2. Progress markers as labels beside the corridor.** User's ask:
+markers belong on the track itself, not a separate HUD bar. The old
+top-of-screen bar + percentage text (screen-space, drawn after
+`ctx.restore()`) is gone entirely. First attempt drew a bright band
+spanning the corridor's full width at each fraction; the user then
+corrected that — nothing should be drawn on the playable surface
+itself, only a label outside it. Current shape: `progressMarkers`
+(computed once, alongside `corridorOutline`, from `route.points` via
+`positionAtTime`/`headingAt` at 20/40/60/80% of `route.duration`) each
+store a label position offset outward from the corridor edge by
+`CORRIDOR_HALF_WIDTH + PROGRESS_LABEL_MARGIN` (36) along a fixed lateral
+side. Each frame, `draw()` renders `"20%"`/`"40%"`/etc. there — upright
+regardless of the corridor's heading at that point, since world space
+here is only ever translated/scaled, never rotated — dim before the dot
+reaches them, brightening permanently once passed. After a follow-up
+("too small, make them more prominent") the font went from 16px to bold
+34px monospace with a dark stroke (`lineWidth 6`, `rgba(0,0,0,0.65)`)
+drawn behind the fill, so the label pops against both the dark
+background and the corridor's own gray at a glance. World-space, so
+they zoom with everything else during the round-9-3 pull-back below,
+and scroll into view exactly like the rest of the corridor (no separate
+reveal logic).
 
 **3. End-of-run camera pull-back** (the last open piece of "The idea, as
 given" / Scope item 4 / step 6.3, deferred since round 4). On either
@@ -677,9 +688,9 @@ original scope, next up if wanted.
 sandbox limitation as rounds 7–8 (no headless browser here), and this is
 exactly the kind of feel/timing work `CLAUDE.md` flags for a human to
 actually look at rather than trust from the diff: is the shake actually
-gone, does 0.15s follow feel laggy, do the corridor markers read clearly
-at both marking viewports, and does the 0.6s pull-back land somewhere
-that actually shows the whole run.
+gone, does 0.15s follow feel laggy, do the percentage labels read
+clearly (size/contrast) at both marking viewports, and does the 0.6s
+pull-back land somewhere that actually shows the whole run.
 
 ## The idea, as given
 
@@ -940,16 +951,16 @@ stay as-is.
       `game.ts`'s `draw()` reads `route.decorations` (faint always-on dot
       + brightening ring as the player passes each one).
    2. ~~Progress markers~~ — **redesigned in round 9** (see below): moved
-      off the screen-space HUD bar entirely, onto four discrete bands
-      stamped across the corridor itself at 20/40/60/80%.
+      off the screen-space HUD bar entirely, into large percentage labels
+      beside the corridor at 20/40/60/80%.
    3. **End-of-run camera pull-back — done in round 9** (see below); run
       stats (time survived/finished, distance, click count) are the one
       piece of the original step 6.3 scope still not built.
 7. Playtest cold at both marking viewports; capture the one change that
    comes out of that (not out of re-reading the code) for `PROCESS.md`.
 
-**← current checkpoint.** Round 9 (camera-shake fix, on-corridor progress
-markers, end-of-run pull-back — see below) is committed, `pnpm check`
+**← current checkpoint.** Round 9 (camera-shake fix, progress percentage
+labels, end-of-run pull-back — see below) is committed, `pnpm check`
 green (54 tests, unchanged — all three changes are rendering-only). **Not
 yet confirmed live in the browser** — same sandbox limitation as rounds
 7–8 (headless Chromium/Firefox can't launch here); ask the user to check
