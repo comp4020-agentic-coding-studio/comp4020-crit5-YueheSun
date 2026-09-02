@@ -218,3 +218,56 @@ the three or four that show real judgement.
 > offset-from-centerline calculation that doesn't know what the wall looks
 > like. ... I don't want situations where it's visually clear the line
 > hasn't hit the wall, but the game still registers a failure."
+
+## A written-down claim ("the wall matches the hitbox") was trusted instead of checked, and cost two rounds
+
+1. **What happened** — PLAN.md's round 5 and round 7 both stated, in
+   writing, that the rendered corridor wall "matches `hasCrashed`'s real
+   hitbox exactly." That statement was never actually true — `hasCrashed`
+   at the time judged a single rotating offset axis with no concept of
+   wall geometry at all, so there was nothing for a rendered fillet to
+   "match" in the first place. Because the claim was already sitting in
+   PLAN.md as settled fact, two entire rounds (5 and 7) went into getting
+   the corner *shape* exactly right — convex vs. concave constructions,
+   pixel-level fill-rule debugging, a from-scratch geometric derivation —
+   all in service of matching a hitbox that the collision code didn't
+   actually have. The real bug (the collision logic itself, not the
+   render) only surfaced when the user came back with a screenshot and a
+   precise description of what was wrong, rather than another "make the
+   corner look right" ask.
+2. **What worked** — the screenshot plus the explicit statement of intent
+   ("did the line physically touch the wall," not "an abstract offset
+   calculation") did two things a code-only bug report wouldn't have: it
+   showed a concrete, falsifiable instant (this exact frame, this exact
+   position, clearly still inside the corridor) and it named the
+   *category* of fix wanted (real geometry, not a tuning knob on the
+   existing axis). That combination pointed straight at re-deriving what
+   `hasCrashed` actually computed, instead of another pass on the wall
+   render — and a forward-scanning probe against the real code (not
+   another hand-derivation) found the actual single-axis, vertex-blind
+   model in minutes.
+3. **The lesson** — a claim like "these two things match" or "this is
+   already correct" written into a planning doc becomes load-bearing the
+   moment it's trusted by later work — round 7 built an elaborate,
+   carefully-verified corner construction entirely on top of an
+   unverified premise about what it was matching. Once a doc asserts two
+   computations are the same fact, that assertion needs the same
+   evidence as a bug fix (checked against the real running code) before
+   later rounds are allowed to lean on it, not just a plausible-sounding
+   sentence carried forward from an earlier round. Separately: a vague
+   "the corner doesn't look right" complaint sends effort toward the
+   render; a screenshot plus an explicit description of the *kind* of
+   fix wanted sends it toward the actual bug — the second is much more
+   expensive for a human to produce, but it's what actually closed this
+   out correctly on the first attempt.
+4. **The citation** — the false claim: PLAN.md's round 5 ("matches
+   `hasCrashed`'s real hitbox exactly, zero overshoot") and round 7
+   (built on that same premise). The correction: round 8, `898b8d7`.
+
+> "We thought the corridor wall and the collision/failure judgment had
+> already been tied together, and even wrote that into PLAN.md — but the
+> code actually never did this at all. We spent a long time obsessing over
+> the corner shape before finally realizing the real problem was in the
+> collision logic itself. It was only by providing a screenshot plus a
+> detailed description that the AI was able to debug it correctly, in line
+> with what I actually meant."
